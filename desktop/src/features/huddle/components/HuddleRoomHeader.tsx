@@ -5,6 +5,7 @@ import * as React from "react";
 import { useProfileQuery, useSelfProfileCache } from "@/features/profile/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useHuddle } from "../HuddleContext";
+import type { HuddleAgentVoiceSettings } from "./AgentVoiceMenu";
 import { HuddleParticipantsControl } from "./ParticipantList";
 
 type HuddleRosterState = {
@@ -17,6 +18,7 @@ type HuddleRosterState = {
     | "leaving";
   participants: string[];
   agent_pubkeys: string[];
+  agent_voice_settings: Record<string, HuddleAgentVoiceSettings>;
 };
 
 function isVisible(state: HuddleRosterState | null) {
@@ -74,6 +76,7 @@ export function HuddleRoomHeader() {
         activeSpeakers={activeSpeakers}
         speakerLevels={participantSpeakerLevels}
         agentPubkeys={state.agent_pubkeys}
+        agentVoiceSettings={state.agent_voice_settings}
         appearance="room"
         participants={state.participants}
         selfProfile={{

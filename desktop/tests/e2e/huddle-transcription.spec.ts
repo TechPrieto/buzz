@@ -4,6 +4,7 @@ import {
   KIND_HUDDLE_ENDED,
   KIND_HUDDLE_STARTED,
 } from "../../src/shared/constants/kinds";
+import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const HUDDLE_CHANNEL_ID = "11111111-1111-4111-8111-111111111111";
@@ -383,6 +384,92 @@ test("animates the responding agent with the shared speaker ring", async ({
       ),
     )
     .toBe("0");
+});
+
+test("assigns distinct agent voices and exposes compact per-agent controls", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    windowLabel: `huddle-${HUDDLE_CHANNEL_ID}`,
+    ttsSettings: {
+      version: 1,
+      agentTextToSpeech: true,
+      voicePreferences: ["pocket:vera"],
+    },
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      members: [
+        { pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" },
+        { pubkey: TEST_IDENTITIES.alice.pubkey, role: "bot" },
+        { pubkey: TEST_IDENTITIES.bob.pubkey, role: "bot" },
+      ],
+      ttsEnabled: true,
+    },
+  });
+  await page.goto("/");
+
+  const voiceMenus = page.getByTestId("huddle-agent-voice-menu-trigger");
+  await expect(voiceMenus).toHaveCount(2);
+  await expect
+    .poll(async () => {
+      const state = (await page.evaluate(() =>
+        window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_huddle_state"),
+      )) as {
+        agent_voice_settings: Record<
+          string,
+          { enabled: boolean; voice_key: string }
+        >;
+      };
+      return state.agent_voice_settings;
+    })
+    .toMatchObject({
+      [TEST_IDENTITIES.alice.pubkey]: {
+        enabled: true,
+        voice_key: "pocket:vera",
+      },
+    });
+  const assignedVoices = await page.evaluate(async () => {
+    const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+      "get_huddle_state",
+    )) as {
+      agent_voice_settings: Record<string, { voice_key: string }>;
+    };
+    return Object.values(state.agent_voice_settings).map(
+      (settings) => settings.voice_key,
+    );
+  });
+  expect(new Set(assignedVoices).size).toBe(2);
+
+  await voiceMenus.first().click();
+  await waitForAnimations(page);
+  await expect(
+    page.getByText("Agent text-to-speech", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByTestId("huddle-agent-tts-toggle")).toBeChecked();
+  await expect(page.getByTestId("huddle-agent-voice-selector")).toContainText(
+    "Vera",
+  );
+
+  await page.getByTestId("huddle-agent-tts-toggle").click();
+  await expect(page.getByTestId("huddle-agent-voice-selector")).toHaveCount(0);
+  await page.getByTestId("huddle-agent-tts-toggle").click();
+  await expect(page.getByTestId("huddle-agent-tts-toggle")).toBeChecked();
+  await page.getByTestId("huddle-agent-voice-selector").click();
+  await page.getByRole("menuitemradio", { name: "Jane" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const updates = (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (entry) => entry.command === "set_huddle_agent_voice",
+        );
+        return updates.at(-1)?.payload ?? null;
+      }),
+    )
+    .toMatchObject({
+      agentPubkey: TEST_IDENTITIES.alice.pubkey,
+      voiceKey: "pocket:jane",
+    });
 });
 
 test("keeps the colored startup surface while huddle controls connect", async ({

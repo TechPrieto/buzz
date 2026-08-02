@@ -8,11 +8,17 @@ import {
 import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import { UserProfilePopover } from "@/features/profile/ui/UserProfilePopover";
+import type { VoiceRegistryEntry } from "@/features/settings/ui/voiceSettingsLogic";
+import { invokeTauri } from "@/shared/api/tauri";
 import { cn } from "@/shared/lib/cn";
 import { truncatePubkey } from "@/shared/lib/pubkey";
 import { Button } from "@/shared/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
+import {
+  AgentVoiceMenu,
+  type HuddleAgentVoiceSettings,
+} from "./AgentVoiceMenu";
 
 type ParticipantListProps = {
   /** Pubkey hex strings from the Rust huddle state. */
@@ -22,6 +28,8 @@ type ParticipantListProps = {
   speakerLevels?: Record<string, number>;
   /** Pubkeys of agent participants. */
   agentPubkeys?: string[];
+  /** Local, huddle-scoped playback choices for agent participants. */
+  agentVoiceSettings?: Record<string, HuddleAgentVoiceSettings>;
   /** Called when the user clicks the remove button on an agent avatar. */
   onRemoveAgent?: (pubkey: string) => void;
   /** The locally loaded profile is authoritative for the current participant. */
@@ -124,6 +132,7 @@ export function HuddleParticipantsControl({
   activeSpeakers,
   speakerLevels,
   agentPubkeys,
+  agentVoiceSettings,
   onRemoveAgent,
   selfProfile,
   appearance = "bar",
@@ -149,6 +158,46 @@ export function HuddleParticipantsControl({
   const hasAgents = (agentPubkeys?.length ?? 0) > 0;
   const relayAgentsQuery = useRelayAgentsQuery({ enabled: hasAgents });
   const managedAgentsQuery = useManagedAgentsQuery({ enabled: hasAgents });
+  const [voiceRegistry, setVoiceRegistry] = React.useState<
+    VoiceRegistryEntry[]
+  >([]);
+  const [resolvedAgentVoiceSettings, setResolvedAgentVoiceSettings] =
+    React.useState<Record<string, HuddleAgentVoiceSettings>>(
+      agentVoiceSettings ?? {},
+    );
+  const agentRosterKey = (agentPubkeys ?? []).join(":");
+
+  React.useEffect(() => {
+    if (!hasAgents || !agentRosterKey) {
+      setResolvedAgentVoiceSettings({});
+      return;
+    }
+    let disposed = false;
+    Promise.all([
+      invokeTauri<Record<string, HuddleAgentVoiceSettings>>(
+        "ensure_huddle_agent_voice_settings",
+      ),
+      invokeTauri<VoiceRegistryEntry[]>("list_voice_registry"),
+    ])
+      .then(([settings, registry]) => {
+        if (!disposed) {
+          setResolvedAgentVoiceSettings(settings);
+          setVoiceRegistry(registry);
+        }
+      })
+      .catch((error) => {
+        console.error("Failed to load Huddle agent voices:", error);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [agentRosterKey, hasAgents]);
+
+  React.useEffect(() => {
+    if (agentVoiceSettings) {
+      setResolvedAgentVoiceSettings(agentVoiceSettings);
+    }
+  }, [agentVoiceSettings]);
   const identities = React.useMemo(
     () =>
       buildParticipantIdentities({
@@ -180,116 +229,134 @@ export function HuddleParticipantsControl({
   const visibleIdentities = identities.slice(0, MAX_VISIBLE_PARTICIPANTS);
   const hiddenParticipantCount = identities.length - visibleIdentities.length;
 
-  return (
-    <Popover>
-      <div
-        className={cn(
-          "relative flex max-w-full shrink items-center justify-start overflow-x-auto px-1",
-          appearance === "room" ? "gap-2 py-2" : "h-12 gap-1",
-          className,
-        )}
-        data-testid="huddle-participant-strip"
-      >
-        {visibleIdentities.map((participant) =>
-          appearance === "room" ? (
-            <span
-              className="buzz-huddle-participant-tile flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-border/70 bg-muted/45 px-3 py-3"
-              data-testid="huddle-participant-tile"
-              key={participant.pubkey}
-            >
-              <ParticipantAvatar participant={participant} size="room" />
-              <span className="w-full truncate text-center text-xs font-medium text-foreground/80">
-                {participant.displayName}
-              </span>
-            </span>
-          ) : (
-            <Tooltip key={participant.pubkey}>
-              <TooltipTrigger asChild>
-                <span className="inline-flex shrink-0 rounded-full">
-                  <ParticipantAvatar participant={participant} size="bar" />
-                </span>
-              </TooltipTrigger>
-              <TooltipContent className="buzz-huddle-tooltip" side="top">
-                {participant.displayName}
-              </TooltipContent>
-            </Tooltip>
-          ),
-        )}
-        {hiddenParticipantCount > 0 ? (
-          <PopoverTrigger asChild>
-            <Button
-              aria-label={`Show all huddle participants (${participants.length})`}
-              className={cn(
-                "relative z-10 shrink-0 px-1 text-2xs font-semibold shadow-none tabular-nums",
-                appearance === "room"
-                  ? "buzz-huddle-participant-tile min-h-[6.375rem] min-w-28 rounded-xl border border-border/70 bg-muted/45 text-foreground/70 hover:bg-muted/65 hover:text-foreground"
-                  : "h-9 min-w-9 rounded-full border-2 border-black bg-white/15 text-white hover:bg-white/25 hover:text-white",
-              )}
-              type="button"
-              variant="ghost"
-            >
-              +{hiddenParticipantCount}
-            </Button>
-          </PopoverTrigger>
-        ) : null}
-      </div>
-      {hiddenParticipantCount > 0 ? (
-        <PopoverContent
-          align="end"
-          className="buzz-huddle-drawer buzz-huddle-popover w-72 p-3 text-foreground"
-          side={appearance === "room" ? "bottom" : "top"}
-          sideOffset={10}
-        >
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <h2 className="text-sm font-medium">Participants</h2>
-            <span className="shrink-0 text-xs text-foreground/60">
-              {participantLabel}
+  const participantStrip = (
+    <div
+      className={cn(
+        "relative flex max-w-full shrink items-center justify-start overflow-x-auto px-1",
+        appearance === "room" ? "gap-2 py-2" : "h-12 gap-1",
+        className,
+      )}
+      data-testid="huddle-participant-strip"
+    >
+      {visibleIdentities.map((participant) =>
+        appearance === "room" ? (
+          <div
+            className="buzz-huddle-participant-tile relative flex w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-border/70 bg-muted/45 px-3 py-3"
+            data-testid="huddle-participant-tile"
+            key={participant.pubkey}
+          >
+            {participant.isAgent ? (
+              <AgentVoiceMenu
+                agentPubkey={participant.pubkey}
+                displayName={participant.displayName}
+                onSettingsChange={(settings) => {
+                  setResolvedAgentVoiceSettings((current) => ({
+                    ...current,
+                    [participant.pubkey]: settings,
+                  }));
+                }}
+                registry={voiceRegistry}
+                settings={resolvedAgentVoiceSettings[participant.pubkey]}
+              />
+            ) : null}
+            <ParticipantAvatar participant={participant} size="room" />
+            <span className="w-full truncate text-center text-xs font-medium text-foreground/80">
+              {participant.displayName}
             </span>
           </div>
-          <ul className="flex max-h-64 list-none flex-col gap-1 overflow-y-auto">
-            {identities.map((participant) => {
-              const { displayName, isActive, isAgent, pubkey } = participant;
-
-              return (
-                <li
-                  className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5"
-                  key={pubkey}
-                >
-                  <UserProfilePopover
-                    pubkey={pubkey}
-                    triggerAriaLabel={`Open profile for ${displayName}`}
-                    triggerElement="span"
-                  >
-                    <ParticipantAvatar participant={participant} size="list" />
-                  </UserProfilePopover>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-medium">
-                      {displayName}
-                    </div>
-                    <div className="truncate text-xs text-foreground/60">
-                      {isActive ? "Speaking" : isAgent ? "Agent" : "In huddle"}
-                    </div>
-                  </div>
-
-                  {isAgent && onRemoveAgent && (
-                    <Button
-                      aria-label={`Remove ${displayName} from huddle`}
-                      className="h-7 w-7 shrink-0 text-foreground/65 hover:bg-destructive/15 hover:text-destructive"
-                      onClick={() => void onRemoveAgent(pubkey)}
-                      size="icon"
-                      type="button"
-                      variant="ghost"
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        </PopoverContent>
+        ) : (
+          <Tooltip key={participant.pubkey}>
+            <TooltipTrigger asChild>
+              <span className="inline-flex shrink-0 rounded-full">
+                <ParticipantAvatar participant={participant} size="bar" />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="buzz-huddle-tooltip" side="top">
+              {participant.displayName}
+            </TooltipContent>
+          </Tooltip>
+        ),
+      )}
+      {hiddenParticipantCount > 0 ? (
+        <PopoverTrigger asChild>
+          <Button
+            aria-label={`Show all huddle participants (${participants.length})`}
+            className={cn(
+              "relative z-10 shrink-0 px-1 text-2xs font-semibold shadow-none tabular-nums",
+              appearance === "room"
+                ? "buzz-huddle-participant-tile min-h-[6.375rem] min-w-28 rounded-xl border border-border/70 bg-muted/45 text-foreground/70 hover:bg-muted/65 hover:text-foreground"
+                : "h-9 min-w-9 rounded-full border-2 border-black bg-white/15 text-white hover:bg-white/25 hover:text-white",
+            )}
+            type="button"
+            variant="ghost"
+          >
+            +{hiddenParticipantCount}
+          </Button>
+        </PopoverTrigger>
       ) : null}
+    </div>
+  );
+
+  if (hiddenParticipantCount === 0) return participantStrip;
+
+  return (
+    <Popover>
+      {participantStrip}
+      <PopoverContent
+        align="end"
+        className="buzz-huddle-drawer buzz-huddle-popover w-72 p-3 text-foreground"
+        side={appearance === "room" ? "bottom" : "top"}
+        sideOffset={10}
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-medium">Participants</h2>
+          <span className="shrink-0 text-xs text-foreground/60">
+            {participantLabel}
+          </span>
+        </div>
+        <ul className="flex max-h-64 list-none flex-col gap-1 overflow-y-auto">
+          {identities.map((participant) => {
+            const { displayName, isActive, isAgent, pubkey } = participant;
+
+            return (
+              <li
+                className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5"
+                key={pubkey}
+              >
+                <UserProfilePopover
+                  pubkey={pubkey}
+                  triggerAriaLabel={`Open profile for ${displayName}`}
+                  triggerElement="span"
+                >
+                  <ParticipantAvatar participant={participant} size="list" />
+                </UserProfilePopover>
+
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">
+                    {displayName}
+                  </div>
+                  <div className="truncate text-xs text-foreground/60">
+                    {isActive ? "Speaking" : isAgent ? "Agent" : "In huddle"}
+                  </div>
+                </div>
+
+                {isAgent && onRemoveAgent && (
+                  <Button
+                    aria-label={`Remove ${displayName} from huddle`}
+                    className="h-7 w-7 shrink-0 text-foreground/65 hover:bg-destructive/15 hover:text-destructive"
+                    onClick={() => void onRemoveAgent(pubkey)}
+                    size="icon"
+                    type="button"
+                    variant="ghost"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </PopoverContent>
     </Popover>
   );
 }

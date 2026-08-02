@@ -28,6 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/shared/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useHuddle } from "../HuddleContext";
 import { AddAgentDialog, type AgentAddResult } from "./AddAgentDialog";
+import type { HuddleAgentVoiceSettings } from "./AgentVoiceMenu";
 import { MicControls, SpeakerControls } from "./MicControls";
 import { HuddleParticipantsControl } from "./ParticipantList";
 import { truncatePubkey } from "@/shared/lib/pubkey";
@@ -46,6 +47,7 @@ type HuddleState = {
   huddle_thread_event_id: string | null;
   participants: string[]; // pubkey hex strings
   agent_pubkeys: string[];
+  agent_voice_settings: Record<string, HuddleAgentVoiceSettings>;
   tts_enabled: boolean;
   transcription_enabled: boolean;
   is_creator: boolean;
@@ -686,6 +688,7 @@ export function HuddleBar({
               activeSpeakers={activeSpeakers}
               speakerLevels={participantSpeakerLevels}
               agentPubkeys={barState.agent_pubkeys}
+              agentVoiceSettings={barState.agent_voice_settings}
               selfProfile={{
                 avatarUrl:
                   profileQuery.data?.avatarUrl ??

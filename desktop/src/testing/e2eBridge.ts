@@ -2986,6 +2986,7 @@ type MockHuddleState = {
   huddle_thread_event_id: string | null;
   participants: string[];
   agent_pubkeys: string[];
+  agent_voice_settings: Record<string, { enabled: boolean; voice_key: string }>;
   tts_enabled: boolean;
   transcription_enabled: boolean;
   is_creator: boolean;
@@ -3014,7 +3015,22 @@ async function emitMockHuddleState() {
   await emit("huddle-state-changed", structuredClone(mockHuddle.state));
 }
 
-function refreshMockHuddleMembership() {
+const MOCK_POCKET_VOICE_KEYS = [
+  "pocket:anna",
+  "pocket:vera",
+  "pocket:fantine",
+  "pocket:charles",
+  "pocket:paul",
+  "pocket:eponine",
+  "pocket:azelma",
+  "pocket:george",
+  "pocket:mary",
+  "pocket:jane",
+  "pocket:michael",
+  "pocket:eve",
+];
+
+function refreshMockHuddleMembership(config?: E2eConfig | null) {
   if (!mockHuddle) return;
   mockHuddle.state.agent_pubkeys = mockHuddle.members
     .filter((member) => member.role === "bot")
@@ -3022,6 +3038,38 @@ function refreshMockHuddleMembership() {
   mockHuddle.state.participants = mockHuddle.members.map(
     (member) => member.pubkey,
   );
+  mockHuddle.state.agent_voice_settings ??= {};
+  const agentSet = new Set(mockHuddle.state.agent_pubkeys);
+  for (const pubkey of Object.keys(mockHuddle.state.agent_voice_settings)) {
+    if (!agentSet.has(pubkey)) {
+      delete mockHuddle.state.agent_voice_settings[pubkey];
+    }
+  }
+  const defaultVoice =
+    config?.mock?.ttsSettings?.voicePreferences.find((key) =>
+      key.startsWith("pocket:"),
+    ) ?? "pocket:mary";
+  const used = new Set(
+    Object.values(mockHuddle.state.agent_voice_settings).map(
+      (settings) => settings.voice_key,
+    ),
+  );
+  mockHuddle.state.agent_pubkeys.forEach((pubkey, index) => {
+    if (mockHuddle?.state.agent_voice_settings[pubkey]) return;
+    const voiceKey =
+      index === 0 && !used.has(defaultVoice)
+        ? defaultVoice
+        : (MOCK_POCKET_VOICE_KEYS.find(
+            (key) => key !== defaultVoice && !used.has(key),
+          ) ?? defaultVoice);
+    used.add(voiceKey);
+    if (mockHuddle) {
+      mockHuddle.state.agent_voice_settings[pubkey] = {
+        enabled: true,
+        voice_key: voiceKey,
+      };
+    }
+  });
 }
 
 function initializeMockHuddle(
@@ -3053,6 +3101,7 @@ function initializeMockHuddle(
         huddle_thread_event_id: seed.huddleThreadEventId ?? null,
         participants: [],
         agent_pubkeys: [],
+        agent_voice_settings: {},
         tts_enabled: seed.ttsEnabled ?? false,
         transcription_enabled: seed.transcriptionEnabled ?? false,
         is_creator: seed.isCreator ?? true,
@@ -3087,7 +3136,7 @@ function initializeMockHuddle(
       }),
     );
   }
-  refreshMockHuddleMembership();
+  refreshMockHuddleMembership(config);
   persistMockHuddle();
 }
 const openedExternalUrls: string[] = [];
@@ -9700,7 +9749,7 @@ export function maybeInstallE2eTauriMocks() {
     }
     mockHuddle.members = structuredClone(members);
     mockHuddle.state.transcription_enabled = transcriptionEnabled;
-    refreshMockHuddleMembership();
+    refreshMockHuddleMembership(config);
     persistMockHuddle();
     await emitMockHuddleState();
   };
@@ -10044,13 +10093,14 @@ export function maybeInstallE2eTauriMocks() {
             huddle_thread_event_id: null,
             participants: [],
             agent_pubkeys: [],
+            agent_voice_settings: {},
             tts_enabled: false,
             transcription_enabled: false,
             is_creator: true,
             voice_input_mode: "voice_activity",
           },
         };
-        refreshMockHuddleMembership();
+        refreshMockHuddleMembership(activeConfig);
         persistMockHuddle();
         await emitMockHuddleState();
         mockChannels.push(
@@ -10137,6 +10187,7 @@ export function maybeInstallE2eTauriMocks() {
           huddle_thread_event_id: null,
           participants: [],
           agent_pubkeys: [],
+          agent_voice_settings: {},
           tts_enabled: false,
           transcription_enabled: false,
           is_creator: false,
@@ -10153,6 +10204,40 @@ export function maybeInstallE2eTauriMocks() {
         persistMockHuddle();
         await emitMockHuddleState();
         return null;
+      case "ensure_huddle_agent_voice_settings":
+        refreshMockHuddleMembership(activeConfig);
+        persistMockHuddle();
+        return structuredClone(mockHuddle?.state.agent_voice_settings ?? {});
+      case "set_huddle_agent_tts_enabled": {
+        if (!mockHuddle) throw new Error("No active mock huddle.");
+        const request = payload as { agentPubkey?: string; enabled?: boolean };
+        if (!request.agentPubkey || typeof request.enabled !== "boolean") {
+          throw new Error("Missing agent text-to-speech setting.");
+        }
+        refreshMockHuddleMembership(activeConfig);
+        const settings =
+          mockHuddle.state.agent_voice_settings[request.agentPubkey];
+        if (!settings) throw new Error("Agent is not in the active huddle.");
+        settings.enabled = request.enabled;
+        persistMockHuddle();
+        await emitMockHuddleState();
+        return structuredClone(settings);
+      }
+      case "set_huddle_agent_voice": {
+        if (!mockHuddle) throw new Error("No active mock huddle.");
+        const request = payload as { agentPubkey?: string; voiceKey?: string };
+        if (!request.agentPubkey || !request.voiceKey) {
+          throw new Error("Missing agent voice setting.");
+        }
+        refreshMockHuddleMembership(activeConfig);
+        const settings =
+          mockHuddle.state.agent_voice_settings[request.agentPubkey];
+        if (!settings) throw new Error("Agent is not in the active huddle.");
+        settings.voice_key = request.voiceKey;
+        persistMockHuddle();
+        await emitMockHuddleState();
+        return structuredClone(settings);
+      }
       case "add_agent_to_huddle": {
         const result = activeConfig?.mock?.addAgentToHuddleResult;
         if (!result) {

@@ -175,7 +175,7 @@ pub fn resolve_voice_for_backend(
     resolve_voice_for_backend_in_registry(preferences, backend, &bundled_voice_registry())
 }
 
-fn resolve_voice_for_backend_in_registry(
+pub(crate) fn resolve_voice_for_backend_in_registry(
     preferences: &[String],
     backend: &str,
     registry: &[VoiceRegistryEntry],

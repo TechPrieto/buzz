@@ -35,7 +35,7 @@
 //! can gate microphone input while the agent is speaking.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     num::NonZero,
     path::PathBuf,
     sync::{
@@ -239,6 +239,7 @@ impl TtsPipeline {
                 generation: self.voice_generation.load(Ordering::Acquire),
                 route_id: 0,
                 speaker_pubkey: None,
+                voice_reference: None,
                 text,
             })
             .map_err(|e| {
@@ -360,6 +361,7 @@ fn tts_worker(
         ));
         return;
     }
+    let mut style_cache = HashMap::from([(voice_name.clone(), style.clone())]);
 
     // ── 2b. Warmup inference ─────────────────────────────────────────────────
     // The first ONNX inference on any session is significantly slower than
@@ -620,14 +622,19 @@ fn tts_worker(
             continue;
         }
 
-        // Voice changes cancel the old utterance/queue and are observed here,
-        // before receiving subsequent text. A bad bundled asset falls back to
-        // Mary without discarding the already-warmed Pocket engine.
-        let voice_ready =
-            reconcile_selected_voice(&model_dir, &selected_voice, &mut voice_name, &mut style);
-        acknowledge_voice_change(&voice_change_ack, &voice_cancel);
-        if !voice_ready {
-            continue;
+        // A global Settings voice change cancels the old utterance and is
+        // acknowledged before receiving subsequent text. Per-agent voice
+        // changes are carried by each queue item and never drain other agents.
+        if has_pending_voice_change(&voice_change_ack) {
+            let voice_ready =
+                reconcile_selected_voice(&model_dir, &selected_voice, &mut voice_name, &mut style);
+            if voice_ready {
+                style_cache.insert(voice_name.clone(), style.clone());
+            }
+            acknowledge_voice_change(&voice_change_ack, &voice_cancel);
+            if !voice_ready {
+                continue;
+            }
         }
 
         let mut queued_text = Some(match deferred_text.pop_front() {
@@ -679,16 +686,28 @@ fn tts_worker(
             );
             continue;
         }
+        let requested_voice = queued_text.voice_reference.unwrap_or_else(|| {
+            selected_voice
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone()
+        });
         let raw_text = queued_text.text;
         let speaker_pubkey = queued_text.speaker_pubkey;
         let route_id = queued_text.route_id;
         eprintln!("buzz-desktop: tts stage=synthesis status=started route_id={route_id}");
 
-        // The selected voice can change while this worker is blocked in
-        // recv_timeout. Reconcile again after receipt so the first message
-        // queued after an unpublished pipeline is installed cannot use the
-        // voice captured when construction began.
-        if !reconcile_selected_voice(&model_dir, &selected_voice, &mut voice_name, &mut style) {
+        // The selected per-agent voice travels with the queue item, preserving
+        // message order while allowing one warmed Pocket engine to alternate
+        // between cached reference styles.
+        if !reconcile_queued_voice(
+            &model_dir,
+            &requested_voice,
+            &selected_voice,
+            &mut voice_name,
+            &mut style,
+            &mut style_cache,
+        ) {
             eprintln!(
                 "buzz-desktop: tts stage=synthesis status=failed reason=voice_unavailable route_id={route_id}"
             );

@@ -4,11 +4,13 @@
 //! phase enum, voice input mode, and response types.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 
+use super::agent_voice::AgentVoiceSettings;
 use super::{stt, tts};
 
 /// Voice input mode: push-to-talk (PTT) or voice-activity detection (VAD).
@@ -71,6 +73,8 @@ pub struct HuddleState {
         deserialize_with = "deserialize_agent_pubkeys"
     )]
     pub agent_pubkeys: Arc<Mutex<Vec<String>>>,
+    /// Local, huddle-scoped playback choices for each participating agent.
+    pub agent_voice_settings: BTreeMap<String, AgentVoiceSettings>,
     /// Active STT pipeline — not serialized, not cloned.
     #[serde(skip)]
     pub stt_pipeline: Option<Arc<stt::SttPipeline>>,
@@ -170,6 +174,7 @@ impl Clone for HuddleState {
             audio_relay_pcm_tx: None, // Never clone handles.
             participants: self.participants.clone(),
             agent_pubkeys: Arc::new(Mutex::new(agent_pubkeys_snapshot)),
+            agent_voice_settings: self.agent_voice_settings.clone(),
             stt_pipeline: None, // Never clone the pipeline handle.
             tts_pipeline: None, // Never clone the pipeline handle.
             is_creator: self.is_creator,
@@ -200,6 +205,7 @@ impl Default for HuddleState {
             audio_relay_pcm_tx: None,
             participants: Vec::new(),
             agent_pubkeys: Arc::new(Mutex::new(Vec::new())),
+            agent_voice_settings: BTreeMap::new(),
             stt_pipeline: None,
             tts_pipeline: None,
             is_creator: false,

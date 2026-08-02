@@ -24,6 +24,7 @@
 //!    and drops them outside the lock (thread joins can block ~200ms).
 
 mod agent_tts_routing;
+pub mod agent_voice;
 pub mod agents;
 pub mod audio_output;
 pub mod jitter;
@@ -798,12 +799,29 @@ pub async fn speak_agent_message(
     text: String,
     route_id: u64,
     speaker_pubkey: String,
+    app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     eprintln!("buzz-desktop: tts stage=invoke status=started route_id={route_id}");
     // Truncate oversized messages — agents shouldn't monologue in a voice huddle.
     // Use char count (not byte length) to avoid panicking on multi-byte UTF-8.
     let text = normalize_agent_tts_text(text);
+
+    if !state.huddle()?.tts_enabled {
+        eprintln!(
+            "buzz-desktop: tts stage=invoke status=no_op reason=disabled route_id={route_id}"
+        );
+        return Ok(());
+    }
+
+    let Some(voice_reference) =
+        agent_voice::voice_reference_for_agent(&app, &state, &speaker_pubkey)?
+    else {
+        eprintln!(
+            "buzz-desktop: tts stage=invoke status=no_op reason=agent_disabled route_id={route_id}"
+        );
+        return Ok(());
+    };
 
     let needs_pipeline = {
         let mut hs = state.huddle()?;
@@ -862,7 +880,7 @@ pub async fn speak_agent_message(
     };
     enqueue_agent_tts_text(route_id, text, move |route_id, text| {
         sender
-            .send(route_id, speaker_pubkey, text)
+            .send(route_id, speaker_pubkey, voice_reference, text)
             .map_err(|error| format!("TTS queue closed while waiting to enqueue: {error}"))
     })
     .await
