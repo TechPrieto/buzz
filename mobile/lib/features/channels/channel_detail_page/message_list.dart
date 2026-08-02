@@ -411,7 +411,12 @@ class _MessageList extends HookConsumerWidget {
           Positioned(
             left: 0,
             right: 0,
-            bottom: Grid.xs,
+            top:
+                frostedAppBarHeight(
+                  context,
+                  titleContentHeight: appBarTitleContentHeight,
+                ) +
+                Grid.xs,
             child: Center(
               child: IconButton.filled(
                 key: const ValueKey('channel-jump-to-oldest-unread'),
