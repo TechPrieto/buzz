@@ -1,5 +1,5 @@
 //! The create-intent fingerprint (spec §Deploy State Machine, create-intent
-//! fingerprint, `docs/remote-agents.md:771-803`).
+//! fingerprint, `docs/remote-agents.md:796-828`).
 //!
 //! The fingerprint is an unkeyed SHA-256 over a canonical serialization of the
 //! provider's non-secret create-intent template. A plain hash is safe *only*

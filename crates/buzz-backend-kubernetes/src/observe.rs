@@ -48,7 +48,7 @@ fn has_marker(labels: Option<&std::collections::BTreeMap<String, String>>) -> bo
 /// Does the full-pubkey annotation equal the derived pubkey?
 ///
 /// The 32-hex label is collision-*resistant*, not collision-free, which is
-/// why this check is normative rather than decorative (`:1127-1141`).
+/// why this check is normative rather than decorative (`:1152-1166`).
 fn annotation_matches(
     annotations: Option<&std::collections::BTreeMap<String, String>>,
     identity: &AgentIdentity,
@@ -196,15 +196,28 @@ pub fn pull_failure_message(failure: PullFailure, image: &str) -> String {
 pub fn condition(pod: &Pod) -> Option<String> {
     let status = pod.status.as_ref()?;
 
-    if let Some(waiting) = status
+    if let Some(state) = status
         .container_statuses
         .as_ref()
         .and_then(|cs| cs.iter().find(|c| c.name == CONTAINER_NAME))
         .and_then(|c| c.state.as_ref())
-        .and_then(|s| s.waiting.as_ref())
     {
-        if let Some(reason) = waiting.reason.as_deref() {
-            return Some(format!("the container is waiting, reason {reason}"));
+        if let Some(waiting) = state.waiting.as_ref() {
+            if let Some(reason) = waiting.reason.as_deref() {
+                return Some(format!("the container is waiting, reason {reason}"));
+            }
+        }
+        // Exit code and reason only — the terminated `message` is
+        // process-composed output and falls under the same redaction rule as
+        // waiting messages.
+        if let Some(terminated) = state.terminated.as_ref() {
+            return Some(match terminated.reason.as_deref() {
+                Some(reason) => format!(
+                    "the container exited with code {} ({reason})",
+                    terminated.exit_code
+                ),
+                None => format!("the container exited with code {}", terminated.exit_code),
+            });
         }
     }
 

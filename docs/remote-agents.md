@@ -731,6 +731,31 @@ keys on it. Whether ten minutes fits the intended cluster class is a
 product ruling,
 not a correctness one.
 
+**One create attempt per call (normative).** The replacement rows above —
+terminated, never-started provably broken, never-started divergent — exist
+to clear residue from a *previous* life. Once a deploy call has created its
+own pod, a classification that would replace that pod means the attempt this
+call just made has already failed: the harness started, rejected its
+configuration, and exited (the deterministic startup failure), or the pod
+was proven broken. Re-running the identical create against the same cluster
+inside the same call cannot produce a different outcome; what it produces is
+a hot delete/mint/create cycle every poll interval for the whole operation
+deadline, one immutable Secret per cycle (measured live: 107 Secrets in a
+single 600s call), every one younger than §K8s GC's orphan age gate — a
+bounded-call resource DoS and nsec-bearing-Secret amplifier. A binding MUST
+NOT delete-recreate a pod created by the same deploy call: it MUST return
+the in-band error carrying the latest condition (for a terminated container,
+the exit code and reason — never the terminated `message`, which is
+process-composed output under the same redaction rule as pull messages).
+The failed attempt's pod and Secret are deliberately left in place: the pod
+is terminated, so the *next* Start's preflight GC collects the pod and its
+referenced Secret together before that call's own single attempt — retry is
+thereby gated on fresh owner intent, and litter is bounded at one pod plus
+one Secret per press, not per poll. This bounds attempts, not observation:
+the recoverable rows still observe a slow startup for the full deadline, and
+residue from previous lives is still replaced exactly once on the way to
+this call's attempt.
+
 **Destructive decisions come from views you control — reads and writes
 both (normative).** This is one rule with three instances, stated once so
 nobody optimizes an instance away. §K8s GC's same-clock rule is the time

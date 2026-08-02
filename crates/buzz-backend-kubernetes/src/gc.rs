@@ -1,4 +1,4 @@
-//! Preflight garbage collection (spec §K8s GC, `docs/remote-agents.md:1257-1310`).
+//! Preflight garbage collection (spec §K8s GC, `docs/remote-agents.md:1282-1335`).
 //!
 //! GC runs on every deploy, after identity derivation and before the state
 //! transition. It deletes terminated pods (and their referenced Secrets) and
@@ -23,7 +23,7 @@ pub const OPERATION_DEADLINE_SECS: i64 = 600;
 /// preflight GC can delete a Secret whose pod has not been created yet and
 /// strand that deploy. The age bound makes "unreferenced" mean "provably
 /// abandoned" — any attempt that could still reference it has exceeded its own
-/// deadline (`:1276-1294`).
+/// deadline (`:1301-1319`).
 pub const ORPHAN_SECRET_MIN_AGE_SECS: i64 = 2 * OPERATION_DEADLINE_SECS;
 
 /// What a GC pass decided to delete. Names only: the caller re-reads each
@@ -45,7 +45,7 @@ pub struct GcPlan {
 /// and a local clock fast by more than the margin does not race — it
 /// deterministically computes every in-flight Secret as expired, on every
 /// pass, reopening exactly the interleaving the gate exists to close
-/// (`:1296-1310`). A deferred cleanup is free; a wrong deletion is not.
+/// (`:1321-1335`). A deferred cleanup is free; a wrong deletion is not.
 ///
 /// Terminated-pod GC does not use the clock and is unaffected.
 pub fn plan(
@@ -69,7 +69,7 @@ pub fn plan(
 
     // A Secret referenced by ANY existing pod is protected — deliberately
     // including not-yet-started pods, whose `envFrom` is exactly as
-    // load-bearing as a running pod's (`:1237-1239`). Pods being GC'd in this
+    // load-bearing as a running pod's (`:1262-1264`). Pods being GC'd in this
     // same pass are excluded, so their Secrets go with them.
     let doomed_names: Vec<&str> = doomed_pods
         .iter()

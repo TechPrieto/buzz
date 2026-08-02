@@ -280,7 +280,7 @@ mod tests {
     }
 
     /// `Never` only. `OnFailure` is gated on the harness exit-code contract
-    /// *and* a crash-loop classification row (`:1096-1114`); the config layer
+    /// *and* a crash-loop classification row (`:1121-1139`); the config layer
     /// refuses `inactivity_seconds: 0` so this arm is unreachable, and the
     /// assertion keeps it that way.
     #[test]
@@ -392,7 +392,7 @@ mod tests {
     }
 
     /// Naming a service account selects a scheduling identity; it must not
-    /// re-enable token mounting (§Pod shape hardening, `:1196-1200`).
+    /// re-enable token mounting (§Pod shape hardening, `:1221-1225`).
     #[test]
     fn service_account_does_not_re_enable_token_mounting() {
         let mut cfg = provider_config();

@@ -7,13 +7,13 @@
 //! * **409 is discriminated on `Status.reason`, never on the code.** A create
 //!   409 is `AlreadyExists`; a delete 409 from a failed precondition is
 //!   `Conflict`. Branching on `code == 409` conflates a lost create race with
-//!   a stale fence and is the trap the spec names (`:755-769`).
+//!   a stale fence and is the trap the spec names (`:780-794`).
 //! * **Reads leave `resourceVersion` unset**, which is the quorum read. `"0"`
 //!   is the cache read, and a confirmed absence from a cache is proof of
-//!   nothing (`:736-744`).
+//!   nothing (`:761-769`).
 //! * **Deletes never set `grace_period_seconds`**, so the object's own 60s
 //!   budget applies. Passing `0` is a force-kill that discards the shutdown
-//!   window the pod declares (`:1160-1164`).
+//!   window the pod declares (`:1185-1189`).
 
 use crate::classify::Fence;
 use crate::reconcile::{CreateOutcome, DeleteOutcome, Substrate};
@@ -82,7 +82,7 @@ impl Cluster {
     /// `Api::list` returns only the decoded body, and the apiserver's clock is
     /// the *only* clock the orphan-Secret age gate may use — a desktop's local
     /// clock running fast computes every in-flight Secret as expired
-    /// (`:1296-1310`). So the list goes through `Client::send`, which hands
+    /// (`:1321-1335`). So the list goes through `Client::send`, which hands
     /// back the whole `http::Response`.
     async fn list_with_date<K>(
         &self,
@@ -160,7 +160,7 @@ impl Substrate for Cluster {
             // Namespace-create is frequently denied on shared clusters. Name
             // the exact command an operator runs, and never silently fall back
             // to `default` — deploying an agent into someone else's namespace
-            // is worse than refusing (`:977-980`).
+            // is worse than refusing (`:1002-1005`).
             Err(e) if reason_is(&e, REASON_FORBIDDEN) => Err(format!(
                 "not authorized to create namespace {namespace}. Ask a cluster \
                  administrator to run `kubectl create namespace {namespace}`, \
@@ -358,7 +358,7 @@ mod tests {
     /// The one discriminator the whole file rests on, and the trap the spec
     /// predicts: "an implementation that branches on the code alone will
     /// eventually take the adoption path on a failed delete or vice versa"
-    /// (`:763-765`).
+    /// (`:788-790`).
     ///
     /// Both of these are 409. Reading the *code* makes them identical; reading
     /// `Status.reason` keeps a lost create race and a stale fence apart. The
@@ -412,7 +412,7 @@ mod tests {
     /// — fixture *and* assertion — which is true for any pair of distinct
     /// values. That tests the discriminator is self-consistent, not that it is
     /// correct: swapping the two 409 values inverts `AlreadyExists` and
-    /// `Conflict` at a real apiserver (`:763-765`'s failure, reached by
+    /// `Conflict` at a real apiserver (`:788-790`'s failure, reached by
     /// editing a string instead of a branch) with every other test still
     /// green. These are `apimachinery`'s wire strings and kube-core exposes no
     /// constant for them, so a literal is the only external anchor available.

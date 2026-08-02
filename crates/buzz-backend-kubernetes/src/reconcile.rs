@@ -14,7 +14,7 @@
 //! * **A create-conflict loser never repairs.** It verifies the winner, drops
 //!   its own Secret, and *observes* until the winner starts. Applying the
 //!   divergence row to the pod that just beat it is exactly the ping-pong the
-//!   spec forbids (`:820-825`), and the escape it names is the *next* deploy,
+//!   spec forbids (`:845-850`), and the escape it names is the *next* deploy,
 //!   not this one.
 
 use crate::classify::{self, Action, Fence, Startup, VerifiedPod};
@@ -33,7 +33,7 @@ pub enum CreateOutcome {
     Created,
     /// 409 with `Status.reason: AlreadyExists` — a concurrent attempt won.
     /// Discriminated on the typed reason, never on the HTTP code alone: 409 is
-    /// also `Conflict`, which means a failed precondition (`:755-769`).
+    /// also `Conflict`, which means a failed precondition (`:780-794`).
     AlreadyExists,
 }
 
@@ -41,12 +41,12 @@ pub enum CreateOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteOutcome {
     Accepted,
-    /// Already gone. Delete-not-found is success (`:817`).
+    /// Already gone. Delete-not-found is success (`:842`).
     NotFound,
     /// 409 with `Status.reason: Conflict` — the object changed since the
     /// observation that authorized this delete. Neither an error nor
     /// permission to retry: re-enter and classify what exists now
-    /// (`:750-752`).
+    /// (`:775-777`).
     PreconditionFailed,
 }
 
@@ -56,20 +56,20 @@ pub enum DeleteOutcome {
 pub trait Substrate {
     /// Create the namespace if absent. On RBAC denial the error MUST name the
     /// literal `kubectl create namespace <name>` command and MUST NOT fall
-    /// back to `default` (`:977-980`).
+    /// back to `default` (`:1002-1005`).
     async fn ensure_namespace(&self, namespace: &str) -> Result<(), String>;
 
     /// Most-recent read of the pods matching this identity's selector, plus
     /// the apiserver's clock from the same call's HTTP `Date` header. `None`
     /// clock means the header was absent or unparseable, which makes the
-    /// orphan-Secret sweep skip (`:1296-1310`).
+    /// orphan-Secret sweep skip (`:1321-1335`).
     async fn list_pods(&self, selector: &str) -> Result<(Vec<Pod>, Option<DateTime<Utc>>), String>;
 
     async fn list_secrets(&self, selector: &str) -> Result<Vec<Secret>, String>;
 
     /// Most-recent existence check (`resourceVersion` explicitly unset, not
     /// `"0"`): the classifier treats a confirmed absence as proof, so a
-    /// possibly-stale cache read would be proof of nothing (`:736-744`).
+    /// possibly-stale cache read would be proof of nothing (`:761-769`).
     async fn secret_exists(&self, name: &str) -> Result<bool, String>;
 
     async fn create_secret(&self, secret: &Secret) -> Result<(), String>;
@@ -79,7 +79,7 @@ pub trait Substrate {
     /// Compare-and-delete against the fence from the authorizing observation.
     /// Uses the object's own grace period — never `grace_period_seconds: 0`,
     /// which is a force-kill that discards the declared 60s shutdown budget
-    /// (`:1160-1164`).
+    /// (`:1185-1189`).
     async fn delete_pod(&self, name: &str, fence: &Fence) -> Result<DeleteOutcome, String>;
 
     /// Best-effort: the Secret may already be gone, which is success.
@@ -225,7 +225,7 @@ async fn try_preflight_gc(
 ///
 /// Mandatory before recreating: `DELETE` returns success while the object
 /// still exists, and the deterministic name stays taken for the whole grace
-/// period (`:1152-1170`).
+/// period (`:1177-1195`).
 async fn await_disappearance(substrate: &impl Substrate, name: &str) -> Result<(), String> {
     while substrate.elapsed() < DEADLINE {
         if substrate.get_pod(name).await?.is_none() {
@@ -244,7 +244,7 @@ async fn await_disappearance(substrate: &impl Substrate, name: &str) -> Result<(
 ///
 /// Protection deliberately spans *all* our pods, not just the winner: an
 /// `envFrom` reference from a pod still pulling its image is exactly as
-/// load-bearing as one from a running pod (`:1236-1239`).
+/// load-bearing as one from a running pod (`:1261-1264`).
 async fn secret_is_referenced(
     substrate: &impl Substrate,
     identity: &AgentIdentity,
@@ -261,7 +261,7 @@ async fn secret_is_referenced(
 ///
 /// Only ever called with a name this process generated, and gated on the
 /// reference check: "never the winner's, never any Secret referenced by an
-/// existing pod" (`:1234-1239`). Failure is logged, not fatal — a leaked
+/// existing pod" (`:1259-1264`). Failure is logged, not fatal — a leaked
 /// Secret is collected by the age-gated sweep.
 async fn drop_own_secret(substrate: &impl Substrate, identity: &AgentIdentity, secret: &str) {
     match secret_is_referenced(substrate, identity, secret).await {
@@ -281,7 +281,7 @@ async fn drop_own_secret(substrate: &impl Substrate, identity: &AgentIdentity, s
 /// pod. A winner that is terminated or provably broken is reported, not
 /// repaired; the spec's escape is "a *subsequent* deploy that walks in and
 /// observes that never-started divergent winner replaces it normally"
-/// (`:824-825`).
+/// (`:849-850`).
 async fn adopt_winner(
     substrate: &impl Substrate,
     identity: &AgentIdentity,
@@ -361,6 +361,17 @@ pub async fn deploy(
 
     let desired = crate::pod::intent_template(cfg, env.keys().cloned()).fingerprint();
 
+    // Has THIS call created a pod? Set once its create lands. The replacement
+    // rows below are for residue from a previous life; once this call has made
+    // its own attempt, a replace-classification means that attempt failed —
+    // and startup verification is part of create, so the failure is reported
+    // in-band rather than retried. Without this bound a deterministic startup
+    // failure (the harness starts, rejects its configuration, exits) is
+    // delete-recreated every poll for the whole deadline, minting an immutable
+    // Secret per cycle — measured live at 107 Secrets in one 600s call, every
+    // one younger than the orphan sweep's age gate.
+    let mut created_this_call = false;
+
     loop {
         if substrate.elapsed() >= DEADLINE {
             return Err(format!(
@@ -393,6 +404,28 @@ pub async fn deploy(
             Action::AwaitDisappearance { name } => await_disappearance(substrate, &name).await?,
 
             Action::Delete { name, fence } => {
+                // This call already made its own attempt, and that attempt is
+                // what the classification wants replaced: it terminated (the
+                // deterministic startup failure — the harness starts, rejects
+                // its configuration, exits) or was proven broken. Replacing it
+                // here retries the identical configuration against the same
+                // cluster: a hot delete/mint/create cycle every poll for the
+                // whole deadline, an immutable Secret per cycle — measured
+                // live at 107 Secrets in one 600s call, all younger than the
+                // orphan sweep's age gate. Report in-band instead. The residue
+                // is deliberate: the next Start's preflight GC collects the
+                // terminated pod and its referenced Secret together, so retry
+                // is gated on fresh owner intent and litter stays bounded at
+                // one pod + one Secret per press.
+                if created_this_call {
+                    return Err(format!(
+                        "{name} was created by this deploy and did not stay \
+                         running: {}. Not retrying in this call — an immediate \
+                         exit recurs until its cause is fixed. Check the \
+                         agent's configuration and press Start to try again.",
+                        latest_condition(substrate, identity).await
+                    ));
+                }
                 match substrate.delete_pod(&name, &fence).await? {
                     // Accepted or already gone: both need the disappearance
                     // poll before the name is free again.
@@ -441,7 +474,10 @@ pub async fn deploy(
                     // unverifiable, re-entering without advancing the clock
                     // would hot-spin creates against the apiserver for the
                     // whole deadline.
-                    CreateOutcome::Created => substrate.sleep(POLL_INTERVAL).await,
+                    CreateOutcome::Created => {
+                        created_this_call = true;
+                        substrate.sleep(POLL_INTERVAL).await
+                    }
                     CreateOutcome::AlreadyExists => {
                         return adopt_winner(substrate, identity, &secret_name).await
                     }
@@ -788,7 +824,7 @@ mod tests {
     }
 
     /// ...including when the desired intent has diverged. Edits reach a
-    /// started pod only via the next generation (`:836-840`).
+    /// started pod only via the next generation (`:861-865`).
     #[test]
     fn started_pod_no_ops_under_divergent_intent() {
         let id = identity();
@@ -850,7 +886,7 @@ mod tests {
     }
 
     /// A failed precondition is neither an error nor permission to retry the
-    /// delete: re-enter and classify what exists now (`:750-752`). Here the
+    /// delete: re-enter and classify what exists now (`:775-777`). Here the
     /// object has become a *started* pod, so the correct outcome is the no-op
     /// row — never a second delete with a fresher fence.
     #[test]
@@ -1159,11 +1195,142 @@ mod tests {
         }
     }
 
+    // ---- bounded replacement ------------------------------------------------
+
+    /// Installs a hook that makes every pod under `name` crash-exit before the
+    /// next poll — a deterministic startup failure (the harness starts, rejects
+    /// its configuration, and exits) as observed live: the container reaches
+    /// `state.terminated` with a nonzero exit code.
+    fn crash_exits_immediately(fake: &Fake, name: String) {
+        fake.on_poll
+            .borrow_mut()
+            .push(Box::new(move |pods: &mut BTreeMap<String, Pod>| {
+                if let Some(pod) = pods.get_mut(&name) {
+                    if pod
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.container_statuses.as_ref())
+                        .is_none()
+                    {
+                        pod.status = Some(PodStatus {
+                            phase: Some("Failed".into()),
+                            container_statuses: Some(vec![ContainerStatus {
+                                name: crate::observe::CONTAINER_NAME.into(),
+                                state: Some(ContainerState {
+                                    terminated: Some(ContainerStateTerminated {
+                                        exit_code: 1,
+                                        reason: Some("Error".into()),
+                                        ..Default::default()
+                                    }),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            }]),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }));
+    }
+
+    /// A pod that this call created and that crash-exits deterministically is
+    /// reported in-band after exactly ONE attempt — never hot-replaced until
+    /// the deadline. The live failure this pins: one delete/create cycle every
+    /// ~4s minted 107 immutable Secrets in a single 600s deploy call, all
+    /// younger than the orphan sweep's age gate.
+    #[test]
+    fn a_deterministic_crash_exit_is_reported_not_hot_replaced() {
+        let id = identity();
+        let cfg = config();
+        let fake = Fake::default();
+        crash_exits_immediately(&fake, id.pod_name());
+
+        let err = run(&fake, &id, &cfg).unwrap_err();
+
+        let creates = fake
+            .mutations()
+            .iter()
+            .filter(|c| c.starts_with("create_secret"))
+            .count();
+        assert_eq!(
+            creates, 1,
+            "hot replacement loop: {creates} Secrets minted in one deploy call"
+        );
+        assert!(
+            err.contains("exited with code 1"),
+            "error does not carry the exit: {err}"
+        );
+        // The failed attempt is left in place as evidence — no cleanup on the
+        // error path. Its Secret stays referenced by the terminated pod, so
+        // the next deploy's preflight GC collects both together.
+        assert!(
+            !fake
+                .mutations()
+                .iter()
+                .any(|c| c.starts_with("delete_pod") || c.starts_with("delete_secret")),
+            "the failed attempt was cleaned up on the error path: {:?}",
+            fake.mutations()
+        );
+        assert!(
+            fake.elapsed() < DEADLINE,
+            "burned the whole deadline on a deterministic failure"
+        );
+    }
+
+    /// The revive path is untouched: terminated residue from a *previous*
+    /// life is still replaced — the bound is on pods this call created, not
+    /// on the row.
+    #[test]
+    fn pre_existing_terminated_residue_is_still_replaced_once() {
+        let id = identity();
+        let cfg = config();
+        let fake = Fake::default().with_pod(our_pod(&id, &cfg, Some(terminated())));
+        crash_exits_immediately(&fake, id.pod_name());
+
+        let err = run(&fake, &id, &cfg).unwrap_err();
+        assert!(err.contains("exited with code 1"), "got: {err}");
+
+        let calls = fake.mutations();
+        let deletes = calls.iter().filter(|c| c.starts_with("delete_pod")).count();
+        let creates = calls
+            .iter()
+            .filter(|c| c.starts_with("create_secret"))
+            .count();
+        // Exactly one residue delete (the normal restart path) and one fresh
+        // attempt — then report, not another cycle.
+        assert_eq!(deletes, 1, "unexpected delete traffic: {calls:?}");
+        assert_eq!(creates, 1, "unexpected create traffic: {calls:?}");
+    }
+
+    /// Retry is gated on fresh owner intent: the *next* deploy call clears
+    /// the crashed attempt (preflight GC collects the terminated pod and its
+    /// referenced Secret together) and makes exactly one new attempt — total
+    /// litter stays one pod + one Secret however many times Start is pressed.
+    #[test]
+    fn the_next_deploy_collects_the_crashed_attempt_before_its_own_attempt() {
+        let id = identity();
+        let cfg = config();
+        let fake = Fake::default();
+        crash_exits_immediately(&fake, id.pod_name());
+
+        run(&fake, &id, &cfg).unwrap_err();
+        // Second Start: fresh call, fresh clock.
+        *fake.elapsed.borrow_mut() = Duration::ZERO;
+        run(&fake, &id, &cfg).unwrap_err();
+
+        assert_eq!(
+            fake.secrets.borrow().len(),
+            1,
+            "crashed attempts accumulated Secrets across calls"
+        );
+        assert_eq!(fake.pods.borrow().len(), 1, "crashed pods accumulated");
+    }
+
     // ---- the auto-repair fence ----------------------------------------------
 
     /// An object under our deterministic name that lacks the management
     /// marker is not ours. The reconciler must not adopt it, delete it, or
-    /// return its name — it fails closed to the operator (`:1131-1137`).
+    /// return its name — it fails closed to the operator (`:1156-1162`).
     #[test]
     fn an_unmarked_look_alike_is_never_touched_or_adopted() {
         let id = identity();
@@ -1192,7 +1359,7 @@ mod tests {
 
     /// Same fence, other direction: the marker is present but the annotation
     /// carries a different agent's pubkey. The 32-hex label is
-    /// collision-resistant, not collision-free (`:1127-1130`).
+    /// collision-resistant, not collision-free (`:1152-1155`).
     #[test]
     fn a_pubkey_mismatch_is_never_adopted() {
         let id = identity();
@@ -1217,7 +1384,7 @@ mod tests {
     // ---- create-conflict convergence ---------------------------------------
 
     /// The loser adopts the winner, returns the winner's id, and deletes
-    /// **only its own** Secret — never the winner's (`:1234-1239`).
+    /// **only its own** Secret — never the winner's (`:1259-1264`).
     #[test]
     fn create_loser_adopts_the_winner_and_drops_only_its_own_secret() {
         let id = identity();
@@ -1262,7 +1429,7 @@ mod tests {
     }
 
     /// The loser must not apply the divergence row to the pod that just beat
-    /// it — that is the ping-pong the spec forbids (`:820-825`). A divergent
+    /// it — that is the ping-pong the spec forbids (`:845-850`). A divergent
     /// *started* winner is adopted as-is.
     #[test]
     fn create_loser_does_not_replace_a_divergent_winner() {
@@ -1339,7 +1506,7 @@ mod tests {
     }
 
     /// An RBAC denial on namespace create fails the deploy with the literal
-    /// command to run, before any Secret is written (`:977-980`).
+    /// command to run, before any Secret is written (`:1002-1005`).
     #[test]
     fn namespace_denial_fails_before_writing_any_secret() {
         let id = identity();

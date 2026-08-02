@@ -1,5 +1,5 @@
 //! Cluster auth and client construction (spec §Cluster auth,
-//! `docs/remote-agents.md:960-970`).
+//! `docs/remote-agents.md:985-995`).
 //!
 //! Standard kubeconfig resolution (`$KUBECONFIG` → `~/.kube/config`).
 //! `provider_config` carries `context` and `namespace` only — credentials
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 /// credential plugins (`aws eks get-token`, `gke-gcloud-auth-plugin`) that
 /// resolve via `PATH` — and this provider inherits a Finder-launched
 /// desktop's minimal `PATH`, which contains none of the places those plugins
-/// install to (`:964-969`).
+/// install to (`:989-994`).
 const PATH_PREPEND: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 /// Compute the new `PATH` value: plugin directories first, inherited entries
@@ -84,7 +84,7 @@ fn exec_plugin_for(context: Option<&str>) -> Option<ExecConfig> {
 ///
 /// When the context authenticates through an exec plugin that is not on
 /// `PATH`, that is almost always the cause, and the actionable fact is the
-/// plugin's name — not a kube-rs error chain (`:969-970`).
+/// plugin's name — not a kube-rs error chain (`:994-995`).
 fn explain(context: Option<&str>, error: &kube::Error) -> String {
     if let Some(command) = exec_plugin_for(context).and_then(|e| e.command) {
         if !resolves_on_path(&command) {

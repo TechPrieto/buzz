@@ -37,7 +37,7 @@ pub struct DeployRequest {
 /// Only the fields this binding actually consumes are typed. `name` (display
 /// name), `model`, `provider`, and `turn_timeout_seconds` are deliberately
 /// absent: object names derive from the pubkey, not the display name
-/// (`:1125-1127`), the model/provider pair arrives already resolved inside
+/// (`:1150-1152`), the model/provider pair arrives already resolved inside
 /// `launch`, and the timeout is ignored upstream — typing any of them would
 /// invite a provider-side remap the spec forbids.
 #[derive(Debug, Deserialize)]

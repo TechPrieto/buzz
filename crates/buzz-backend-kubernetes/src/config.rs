@@ -1,5 +1,5 @@
 //! `provider_config` parsing and the `info` config schema
-//! (spec §`provider_config` v1 fields, `docs/remote-agents.md:1359-1364`).
+//! (spec §`provider_config` v1 fields, `docs/remote-agents.md:1384-1389`).
 //!
 //! Nine fields, all optional except `image` (v1 ships no baked default —
 //! §Image). No credential field exists, by I2: cluster auth comes from ambient
@@ -47,7 +47,7 @@ pub const TERMINATION_GRACE_SECONDS: i64 = 60;
 
 /// The only restart policy v1 ships. `OnFailure` is double-gated on the
 /// harness exit-code contract *and* a crash-loop classification row the state
-/// machine does not have (`:1096-1114`); until both land the provider refuses
+/// machine does not have (`:1121-1139`); until both land the provider refuses
 /// the combination rather than shipping against an undefended convention.
 pub const RESTART_POLICY: &str = "Never";
 
