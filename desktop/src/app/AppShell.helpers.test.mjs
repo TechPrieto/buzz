@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { shouldBounceForChannelNotification } from "./AppShell.helpers.ts";
+import {
+  markAllReadSources,
+  shouldBounceForChannelNotification,
+} from "./AppShell.helpers.ts";
 
 test("shouldBounceForChannelNotification_allowsTopLevelChannelMessages", () => {
   assert.equal(shouldBounceForChannelNotification([["h", "channel"]]), true);
@@ -26,4 +29,20 @@ test("shouldBounceForChannelNotification_allowsBroadcastReplies", () => {
     ]),
     true,
   );
+});
+
+test("markAllReadSources clears Inbox overrides before channel markers", () => {
+  const calls = [];
+
+  markAllReadSources({
+    unreadFeedItemIds: new Set(["first-inbox-item", "second-inbox-item"]),
+    undoUnreadFeedItem: (itemId) => calls.push(`inbox:${itemId}`),
+    markAllChannelReadMarkers: () => calls.push("channels"),
+  });
+
+  assert.deepEqual(calls, [
+    "inbox:first-inbox-item",
+    "inbox:second-inbox-item",
+    "channels",
+  ]);
 });

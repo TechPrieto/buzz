@@ -86,6 +86,21 @@ export function shouldBounceForChannelNotification(tags: string[][]): boolean {
   return !isThreadReply(tags);
 }
 
+export function markAllReadSources({
+  markAllChannelReadMarkers,
+  undoUnreadFeedItem,
+  unreadFeedItemIds,
+}: {
+  markAllChannelReadMarkers: () => void;
+  undoUnreadFeedItem: (itemId: string) => void;
+  unreadFeedItemIds: ReadonlySet<string>;
+}) {
+  for (const itemId of unreadFeedItemIds) {
+    undoUnreadFeedItem(itemId);
+  }
+  markAllChannelReadMarkers();
+}
+
 export function toSearchHit(
   target: DesktopNotificationTarget,
 ): SearchHit | null {

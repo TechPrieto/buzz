@@ -182,10 +182,10 @@ export function ChannelContextMenuItems({
   const {
     feedItemState,
     hasSidebarUnreadProjections,
+    locallyUnreadFeedItems,
     unreadThreadChannelIds,
-    unreadThreadFeedItems,
   } = useAppShell();
-  const channelUnreadOverrideIds = unreadThreadFeedItems.flatMap((item) =>
+  const channelUnreadOverrideIds = locallyUnreadFeedItems.flatMap((item) =>
     item.channelId === channel.id && feedItemState.unreadSet.has(item.id)
       ? [item.id]
       : [],

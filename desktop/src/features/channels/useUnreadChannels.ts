@@ -304,9 +304,18 @@ export function useUnreadChannels(
     (
       channelId: string,
       readAt: string | null | undefined,
-      { topLevelOnly = false }: { topLevelOnly?: boolean } = {},
+      {
+        preserveForcedUnread = false,
+        topLevelOnly = false,
+      }: {
+        preserveForcedUnread?: boolean;
+        topLevelOnly?: boolean;
+      } = {},
     ) => {
-      if (Object.hasOwn(forcedUnreadRef.current, channelId)) {
+      if (
+        !preserveForcedUnread &&
+        Object.hasOwn(forcedUnreadRef.current, channelId)
+      ) {
         delete forcedUnreadRef.current[channelId];
         if (pubkey) {
           forcedUnreadStore.write(pubkey, forcedUnreadRef.current);

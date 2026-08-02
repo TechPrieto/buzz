@@ -26,7 +26,10 @@ type UseHomeInboxReadStateOptions = {
   markChannelRead: (
     channelId: string,
     readAt: string | null | undefined,
-    options?: { topLevelOnly?: boolean },
+    options?: {
+      preserveForcedUnread?: boolean;
+      topLevelOnly?: boolean;
+    },
   ) => void;
   /** Force a channel's unread indicator without rolling back its NIP-RS marker. */
   markChannelUnread: (channelId: string, source?: ForcedUnreadSource) => void;
@@ -240,6 +243,7 @@ export function useHomeInboxReadState({
           markChannelRead(
             groupedChannelRead.channelId,
             new Date(groupedChannelRead.timestamp * 1_000).toISOString(),
+            { preserveForcedUnread: true, topLevelOnly: true },
           );
         }
         return;

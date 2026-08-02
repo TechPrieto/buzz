@@ -13,7 +13,10 @@ type AppShellContextValue = {
   markChannelRead: (
     channelId: string,
     readAt: string | null | undefined,
-    options?: { topLevelOnly?: boolean },
+    options?: {
+      preserveForcedUnread?: boolean;
+      topLevelOnly?: boolean;
+    },
   ) => void;
   markChannelUnread: (channelId: string, source?: ForcedUnreadSource) => void;
   clearChannelUnreadSource: (

@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useLocation } from "@tanstack/react-router";
-import { deriveShellRoute } from "@/app/AppShell.helpers";
+import { deriveShellRoute, markAllReadSources } from "@/app/AppShell.helpers";
 import { AppShellProvider } from "@/app/AppShellContext";
 import * as BuzzTheme from "@/app/BuzzThemeSurfaces";
 import { AppShellOverlays } from "@/app/AppShellOverlays";
@@ -323,7 +323,7 @@ export function AppShell() {
   } = useThreadFollows(identityQuery.data?.pubkey);
 
   const {
-    markAllChannelsRead,
+    markAllChannelsRead: markAllChannelReadMarkers,
     markChannelRead,
     markChannelUnread,
     clearChannelUnreadSource,
@@ -357,6 +357,18 @@ export function AppShell() {
     onThreadReplyDesktopNotification: handleThreadReplyDesktopNotification,
     followedRootIds,
   });
+
+  const markAllChannelsRead = React.useCallback(() => {
+    markAllReadSources({
+      markAllChannelReadMarkers,
+      undoUnreadFeedItem: feedItemState.undoUnread,
+      unreadFeedItemIds: feedItemState.unreadSet,
+    });
+  }, [
+    feedItemState.undoUnread,
+    feedItemState.unreadSet,
+    markAllChannelReadMarkers,
+  ]);
 
   const {
     getThreadReadAt,

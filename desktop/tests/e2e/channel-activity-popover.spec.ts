@@ -13,6 +13,12 @@ type MockMessageEvent = {
   pubkey: string;
 };
 
+type MockInboxFeedItem = {
+  content: string;
+  id: string;
+  tags: string[][];
+};
+
 async function waitForMockLiveSubscription(page: Page, channelName: string) {
   await expect
     .poll(() =>
@@ -76,6 +82,57 @@ async function emitMockMessage(
     throw new Error("Mock message emitter is unavailable");
   }
   return event;
+}
+
+async function pushMockInboxFeedItems(page: Page, items: MockInboxFeedItem[]) {
+  await page.waitForFunction(
+    () =>
+      typeof (window as Window & { __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: unknown })
+        .__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ === "function",
+  );
+  await page.evaluate(
+    ({ channelId, feedItems, senderPubkey }) => {
+      const pushFeedItem = (
+        window as Window & {
+          __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
+            category: "mention";
+            channel_id: string;
+            channel_name: string;
+            channel_type: "stream";
+            content: string;
+            created_at: number;
+            id: string;
+            kind: number;
+            pubkey: string;
+            tags: string[][];
+          }) => void;
+        }
+      ).__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+      if (!pushFeedItem) {
+        throw new Error("Mock feed injection helper is unavailable");
+      }
+      const createdAt = Math.floor(Date.now() / 1_000) - 300;
+      for (const item of feedItems) {
+        pushFeedItem({
+          category: "mention",
+          channel_id: channelId,
+          channel_name: "general",
+          channel_type: "stream",
+          content: item.content,
+          created_at: createdAt,
+          id: item.id,
+          kind: 9,
+          pubkey: senderPubkey,
+          tags: item.tags,
+        });
+      }
+    },
+    {
+      channelId: CHANNEL_GENERAL,
+      feedItems: items,
+      senderPubkey: TEST_IDENTITIES.alice.pubkey,
+    },
+  );
 }
 
 async function seedChannelActivity(
@@ -394,76 +451,35 @@ test.describe("channel activity hover preview", () => {
     await expect(page.getByTestId("chat-title")).toHaveText("general");
     await page.getByRole("button", { name: "Inbox", exact: true }).click();
     await expect(page.getByTestId("home-inbox-list")).toBeVisible();
-    await page.waitForFunction(
-      () =>
-        typeof (
-          window as Window & { __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: unknown }
-        ).__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ === "function",
-    );
-    await page.evaluate(
-      ({ channelId, currentPubkey, itemIds, senderPubkey }) => {
-        const pushFeedItem = (
-          window as Window & {
-            __BUZZ_E2E_PUSH_MOCK_FEED_ITEM__?: (item: {
-              category: "mention";
-              channel_id: string;
-              channel_name: string;
-              channel_type: "stream";
-              content: string;
-              created_at: number;
-              id: string;
-              kind: number;
-              pubkey: string;
-              tags: string[][];
-            }) => void;
-          }
-        ).__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
-        if (!pushFeedItem) {
-          throw new Error("Mock feed injection helper is unavailable");
-        }
-        const createdAt = Math.floor(Date.now() / 1_000) - 300;
-        for (const item of [
-          {
-            content: "Older Inbox thread reopened for hover testing.",
-            id: itemIds[0],
-            tags: [
-              ["h", channelId],
-              ["e", "older-inbox-thread-root", "", "root"],
-              ["e", "older-inbox-thread-parent", "", "reply"],
-              ["p", currentPubkey],
-            ],
-          },
-          {
-            content: "A second Inbox thread reopened for hover testing.",
-            id: itemIds[1],
-            tags: [
-              ["h", channelId],
-              ["e", "second-inbox-thread-root", "", "root"],
-              ["e", "second-inbox-thread-parent", "", "reply"],
-              ["p", currentPubkey],
-            ],
-          },
-        ]) {
-          pushFeedItem({
-            category: "mention",
-            channel_id: channelId,
-            channel_name: "general",
-            channel_type: "stream",
-            content: item.content,
-            created_at: createdAt,
-            id: item.id,
-            kind: 9,
-            pubkey: senderPubkey,
-            tags: item.tags,
-          });
-        }
-      },
-      {
-        channelId: CHANNEL_GENERAL,
-        currentPubkey: TEST_IDENTITIES.tyler.pubkey,
-        itemIds: inboxItemIds,
-        senderPubkey: TEST_IDENTITIES.alice.pubkey,
-      },
+    await pushMockInboxFeedItems(
+      page,
+      inboxItemIds.map((id, index) => ({
+        content:
+          index === 0
+            ? "Older Inbox thread reopened for hover testing."
+            : "A second Inbox thread reopened for hover testing.",
+        id,
+        tags: [
+          ["h", CHANNEL_GENERAL],
+          [
+            "e",
+            index === 0
+              ? "older-inbox-thread-root"
+              : "second-inbox-thread-root",
+            "",
+            "root",
+          ],
+          [
+            "e",
+            index === 0
+              ? "older-inbox-thread-parent"
+              : "second-inbox-thread-parent",
+            "",
+            "reply",
+          ],
+          ["p", TEST_IDENTITIES.tyler.pubkey],
+        ],
+      })),
     );
 
     for (const itemId of inboxItemIds) {
@@ -533,8 +549,30 @@ test.describe("channel activity hover preview", () => {
 
     await page.mouse.move(900, 680);
     await expect(popover).toBeHidden();
+    await page.getByRole("button", { name: "Inbox", exact: true }).click();
+    const topLevelItemId = "top-level-inbox-item-for-channel-read";
+    await pushMockInboxFeedItems(page, [
+      {
+        content: "Top-level Inbox item reopened for channel read testing.",
+        id: topLevelItemId,
+        tags: [
+          ["h", CHANNEL_GENERAL],
+          ["p", TEST_IDENTITIES.tyler.pubkey],
+        ],
+      },
+    ]);
+    const topLevelInboxRow = page.getByTestId(
+      `home-inbox-item-${topLevelItemId}`,
+    );
+    await expect(topLevelInboxRow).toBeVisible();
+    await topLevelInboxRow.hover();
+    await topLevelInboxRow.getByRole("button", { name: "Mark unread" }).click();
     await page.getByTestId("channel-general").click({ button: "right" });
     await page.getByRole("menuitem", { name: "Mark as read" }).click();
+    await topLevelInboxRow.hover();
+    await expect(
+      topLevelInboxRow.getByRole("button", { name: "Mark unread" }),
+    ).toBeVisible();
     await expect(page.getByTestId("channel-unread-dot-general")).toHaveCount(0);
     await page.getByTestId("channel-general").hover();
     await expect(
@@ -543,6 +581,68 @@ test.describe("channel activity hover preview", () => {
     await page.getByTestId("channel-random").click();
     await expect(page.getByTestId("chat-title")).toHaveText("random");
     await expect(page.getByTestId("channel-general")).not.toHaveCSS(
+      "font-weight",
+      "600",
+    );
+  });
+
+  test("reading a grouped Inbox thread preserves an unrelated manual unread", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await waitForMockLiveSubscription(page, "general");
+
+    const manualUnreadMessage = await emitMockMessage(
+      page,
+      "Keep this separate timeline message unread.",
+      {
+        pubkey: TEST_IDENTITIES.bob.pubkey,
+        createdAt: Math.floor(Date.now() / 1_000),
+      },
+    );
+    const manualUnreadRow = page
+      .getByTestId("message-row")
+      .filter({ hasText: "Keep this separate timeline message unread." });
+    await manualUnreadRow.hover();
+    await page.getByTestId(`more-actions-${manualUnreadMessage.id}`).click();
+    await page
+      .getByTestId(`mark-read-toggle-${manualUnreadMessage.id}`)
+      .click();
+
+    await page.getByRole("button", { name: "Inbox", exact: true }).click();
+    const groupedRootId = "grouped-inbox-root-preserve-manual";
+    const groupedReplyId = "grouped-inbox-reply-preserve-manual";
+    await pushMockInboxFeedItems(page, [
+      {
+        content: "Grouped Inbox root for manual unread preservation.",
+        id: groupedRootId,
+        tags: [
+          ["h", CHANNEL_GENERAL],
+          ["p", TEST_IDENTITIES.tyler.pubkey],
+        ],
+      },
+      {
+        content: "Grouped Inbox reply marked read independently.",
+        id: groupedReplyId,
+        tags: [
+          ["h", CHANNEL_GENERAL],
+          ["e", groupedRootId, "", "root"],
+          ["e", groupedRootId, "", "reply"],
+          ["p", TEST_IDENTITIES.tyler.pubkey],
+        ],
+      },
+    ]);
+    const groupedInboxRow = page.getByTestId(
+      `home-inbox-item-${groupedReplyId}`,
+    );
+    await expect(groupedInboxRow).toBeVisible();
+    await groupedInboxRow.hover();
+    await groupedInboxRow.getByRole("button", { name: "Mark as read" }).click();
+
+    await page.getByTestId("channel-random").click();
+    await expect(page.getByTestId("channel-general")).toHaveCSS(
       "font-weight",
       "600",
     );
