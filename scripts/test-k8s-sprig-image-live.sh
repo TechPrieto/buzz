@@ -77,7 +77,7 @@ spec:
       imagePullPolicy: $PULL_POLICY
       command: [/bin/bash, -ceu]
       args:
-        - 'test "$(readlink /usr/local/bin/buzz-acp)" = sprig; echo DIGEST_ABI_OK'
+        - 'test "\$(readlink /usr/local/bin/buzz-acp)" = sprig; echo DIGEST_ABI_OK'
 YAML
 
 if ! kubectl --context "$CONTEXT" --namespace "$NAMESPACE" wait \
