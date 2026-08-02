@@ -358,18 +358,6 @@ export function AppShell() {
     followedRootIds,
   });
 
-  const markAllChannelsRead = React.useCallback(() => {
-    markAllReadSources({
-      markAllChannelReadMarkers,
-      undoUnreadFeedItem: feedItemState.undoUnread,
-      unreadFeedItemIds: feedItemState.unreadSet,
-    });
-  }, [
-    feedItemState.undoUnread,
-    feedItemState.unreadSet,
-    markAllChannelReadMarkers,
-  ]);
-
   const {
     getThreadReadAt,
     markThreadRead,
@@ -391,7 +379,24 @@ export function AppShell() {
     threadActivityItems,
     mutedRootIds,
   });
-
+  const markAllChannelsRead = React.useCallback(() => {
+    markAllReadSources({
+      activeChannelId: activeChannel?.id ?? null,
+      channelActivityItems: unreadThreadFeedItems,
+      markAllChannelReadMarkers,
+      markActiveChannelRead: (channelId, createdAt) =>
+        markChannelRead(channelId, new Date(createdAt * 1_000).toISOString()),
+      undoUnreadFeedItem: feedItemState.undoUnread,
+      unreadFeedItemIds: feedItemState.unreadSet,
+    });
+  }, [
+    activeChannel?.id,
+    feedItemState.undoUnread,
+    feedItemState.unreadSet,
+    markAllChannelReadMarkers,
+    markChannelRead,
+    unreadThreadFeedItems,
+  ]);
   // Badge count consumes the shared NIP-RS read-state from useUnreadChannels.
   const { homeBadgeCount, homeBadgeCountExcludingHighPriority } =
     useHomeFeedNotificationState(

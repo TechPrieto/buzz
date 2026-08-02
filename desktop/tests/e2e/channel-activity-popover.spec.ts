@@ -406,6 +406,33 @@ test.describe("channel activity hover preview", () => {
     await expect(page.getByTestId("channel-unread-dot-general")).toHaveCount(0);
   });
 
+  test("marks projected thread activity read in the active channel with Shift+Escape", async ({
+    page,
+  }) => {
+    await seedChannelActivity(page, { includeAgent: false });
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await expect(page.getByTestId("channel-unread-dot-general")).toBeVisible();
+
+    const shortcutHandled = await page.evaluate(() => {
+      const event = new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: "Escape",
+        shiftKey: true,
+      });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(shortcutHandled).toBe(true);
+
+    await expect(page.getByTestId("channel-unread-dot-general")).toHaveCount(0);
+    await page.getByTestId("channel-general").hover();
+    await expect(
+      page.getByTestId("channel-activity-popover-general"),
+    ).toHaveCount(0);
+  });
+
   test("supports row actions and opens an agent's scoped activity", async ({
     page,
   }) => {
