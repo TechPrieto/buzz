@@ -547,21 +547,28 @@ List<TimelineMessage> buildThreadReplies(
 }) {
   // A nested branch head is not a root, so its descendants keep the normal
   // parent/child shape even in a linearized conversation.
-  final isRoot = threadHead.rootId == null || threadHead.rootId == threadHead.id;
+  final isRoot =
+      threadHead.rootId == null || threadHead.rootId == threadHead.id;
   if (!linearize || !isRoot) {
     return childrenByParent[threadHead.id] ?? const [];
   }
 
-  final descendants = [
-    for (final message in allMessages)
-      if (message.id != threadHead.id && message.rootId == threadHead.id)
-        message,
-  ]..sort((left, right) {
-    final byTime = left.createdAt.compareTo(right.createdAt);
-    return byTime != 0 ? byTime : left.id.compareTo(right.id);
-  });
+  final descendants =
+      [
+        for (final message in allMessages)
+          if (message.id != threadHead.id && message.rootId == threadHead.id)
+            message,
+      ]..sort((left, right) {
+        final byTime = left.createdAt.compareTo(right.createdAt);
+        return byTime != 0 ? byTime : left.id.compareTo(right.id);
+      });
   return descendants;
 }
+
+bool shouldShowNestedThreadSummary({
+  required bool linearize,
+  required bool hasNestedChildren,
+}) => !linearize && hasNestedChildren;
 
 bool _isBroadcastReply(TimelineMessage message) {
   return message.tags.any(

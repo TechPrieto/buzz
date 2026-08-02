@@ -856,6 +856,25 @@ void main() {
     });
   });
 
+  group('shouldShowNestedThreadSummary', () {
+    test('hides nested thread affordances inside a linearized DM root', () {
+      expect(
+        shouldShowNestedThreadSummary(linearize: true, hasNestedChildren: true),
+        isFalse,
+      );
+    });
+
+    test('preserves nested thread affordances for normal threads', () {
+      expect(
+        shouldShowNestedThreadSummary(
+          linearize: false,
+          hasNestedChildren: true,
+        ),
+        isTrue,
+      );
+    });
+  });
+
   group('buildMainTimelineEntries', () {
     test('keeps separate direct-message threads as separate entries', () {
       final messages = formatTimeline([
