@@ -135,6 +135,23 @@ async function pushMockInboxFeedItems(page: Page, items: MockInboxFeedItem[]) {
   );
 }
 
+async function getForcedUnreadSources(page: Page): Promise<string[]> {
+  return page.evaluate(
+    ({ channelId, pubkey }) => {
+      const raw = window.localStorage.getItem(
+        `buzz-forced-unread.v1:${pubkey}`,
+      );
+      if (!raw) return [];
+      const entry = JSON.parse(raw)?.[channelId];
+      if (entry === undefined) return [];
+      return typeof entry === "object" && entry !== null
+        ? (entry.sources ?? [])
+        : ["manual"];
+    },
+    { channelId: CHANNEL_GENERAL, pubkey: SELF_PUBKEY },
+  );
+}
+
 async function seedChannelActivity(
   page: Page,
   {
@@ -673,6 +690,58 @@ test.describe("channel activity hover preview", () => {
       "font-weight",
       "600",
     );
+  });
+
+  test("preserves Inbox ownership while another top-level row remains unread", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.getByTestId("channel-general").click();
+    await expect(page.getByTestId("chat-title")).toHaveText("general");
+    await page.getByRole("button", { name: "Inbox", exact: true }).click();
+    const topLevelItemIds = [
+      "first-top-level-inbox-owner",
+      "second-top-level-inbox-owner",
+    ];
+    await pushMockInboxFeedItems(
+      page,
+      topLevelItemIds.map((id, index) => ({
+        content: `Top-level Inbox owner ${index + 1}.`,
+        id,
+        tags: [
+          ["h", CHANNEL_GENERAL],
+          ["p", TEST_IDENTITIES.tyler.pubkey],
+        ],
+      })),
+    );
+    for (const itemId of topLevelItemIds) {
+      const inboxRow = page.getByTestId(`home-inbox-item-${itemId}`);
+      await expect(inboxRow).toBeVisible();
+      await inboxRow.hover();
+      await inboxRow.getByRole("button", { name: "Mark unread" }).click();
+    }
+    await expect(page.getByTestId("channel-general")).toHaveCSS(
+      "font-weight",
+      "600",
+    );
+    await expect.poll(() => getForcedUnreadSources(page)).toEqual(["inbox"]);
+
+    await page.getByRole("button", { name: "Inbox", exact: true }).click();
+    for (const [index, itemId] of topLevelItemIds.entries()) {
+      const inboxRow = page.getByTestId(`home-inbox-item-${itemId}`);
+      await inboxRow.hover();
+      await inboxRow.getByRole("button", { name: "Mark as read" }).click();
+      if (index === 0) {
+        await expect(page.getByTestId("channel-general")).toHaveCSS(
+          "font-weight",
+          "600",
+        );
+        await expect
+          .poll(() => getForcedUnreadSources(page))
+          .toEqual(["inbox"]);
+      }
+    }
+    await expect.poll(() => getForcedUnreadSources(page)).toEqual([]);
   });
 
   test("surfaces future replies after the user reacts to a thread root", async ({

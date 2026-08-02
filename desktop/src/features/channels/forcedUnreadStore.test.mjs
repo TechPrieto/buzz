@@ -28,6 +28,18 @@ test("clearing Inbox ownership leaves a manual force intact", () => {
   });
 });
 
+test("clearing manual ownership leaves an Inbox force intact", () => {
+  const entry = {
+    markerAtWhenForced: 120,
+    sources: ["manual", "inbox"],
+  };
+
+  assert.deepEqual(removeForcedUnreadSource(entry, "manual"), {
+    markerAtWhenForced: 120,
+    sources: ["inbox"],
+  });
+});
+
 test("clearing the only force owner removes the entry", () => {
   const entry = {
     markerAtWhenForced: 120,

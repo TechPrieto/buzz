@@ -215,20 +215,20 @@ export function useHomeInboxReadState({
       for (const id of localUnreadIds) {
         undoUnreadLocal(id);
       }
+      const channelId = item?.item.channelId ?? null;
+      if (
+        channelId &&
+        !hasRemainingChannelUnreadOverride(
+          items,
+          localUnreadSet,
+          channelId,
+          clearedItemIds,
+        )
+      ) {
+        clearChannelUnreadSource(channelId, "inbox");
+      }
       const threadRootId = item ? getInboxThreadRootId(item) : null;
       if (item && threadRootId) {
-        const channelId = item.item.channelId ?? null;
-        if (
-          channelId &&
-          !hasRemainingChannelUnreadOverride(
-            items,
-            localUnreadSet,
-            channelId,
-            clearedItemIds,
-          )
-        ) {
-          clearChannelUnreadSource(channelId, "inbox");
-        }
         const markedReplyIds = new Set<string>();
         for (const reply of [item.item, ...item.groupItems]) {
           if (!isThreadReply(reply.tags) || markedReplyIds.has(reply.id)) {
@@ -249,11 +249,11 @@ export function useHomeInboxReadState({
         return;
       }
 
-      const channelId = item?.item.channelId ?? null;
       if (item && channelId) {
         markChannelRead(
           channelId,
           new Date(item.latestActivityAt * 1_000).toISOString(),
+          { preserveForcedUnread: true },
         );
         return;
       }

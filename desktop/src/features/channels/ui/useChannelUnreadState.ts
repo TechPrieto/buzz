@@ -1,5 +1,6 @@
 import * as React from "react";
 
+import type { ForcedUnreadSource } from "@/features/channels/forcedUnreadStore";
 import {
   buildCreatedAtByMessageId,
   buildDirectReplyIdsByParentId,
@@ -36,10 +37,9 @@ type UseChannelUnreadStateOptions = {
   openThreadMessages?: MainTimelineEntry[];
   getChannelReadAt: (channelId: string) => number | null;
   getMessageReadAt: (messageId: string) => number | null;
-  markChannelRead: (
+  clearChannelUnreadSource: (
     channelId: string,
-    readAt: string | null | undefined,
-    options?: { topLevelOnly?: boolean },
+    source: ForcedUnreadSource,
   ) => void;
   markChannelUnread: (channelId: string) => void;
   markMessageRead: (messageId: string, timestamp: number) => void;
@@ -69,7 +69,7 @@ export function useChannelUnreadState({
   openThreadMessages,
   getChannelReadAt,
   getMessageReadAt,
-  markChannelRead,
+  clearChannelUnreadSource,
   markChannelUnread,
   markMessageRead,
   isThreadMuted,
@@ -459,15 +459,15 @@ export function useChannelUnreadState({
         if (createdAt !== undefined) markMessageRead(id, createdAt);
       }
       if (activeChannelId && forcedUnreadMsgRef.current.size === 0) {
-        markChannelRead(activeChannelId, null, { topLevelOnly: true });
+        clearChannelUnreadSource(activeChannelId, "manual");
       }
       forceUnreadRender();
     },
     [
       activeChannelId,
+      clearChannelUnreadSource,
       createdAtByMessageId,
       getReplyDescendantIdsForMessage,
-      markChannelRead,
       markMessageRead,
     ],
   );

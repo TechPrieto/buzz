@@ -99,6 +99,7 @@ export function ChannelScreen({
   const { goHome } = useAppNavigation();
   const { activeCommunity } = useCommunities();
   const {
+    clearChannelUnreadSource,
     markChannelRead,
     markChannelUnread,
     getChannelReadAt,
@@ -472,9 +473,9 @@ export function ChannelScreen({
     threadReplyTargetId,
     expandedThreadReplyIds,
     openThreadMessages: threadPanelData.visibleReplies,
+    clearChannelUnreadSource,
     getChannelReadAt,
     getMessageReadAt,
-    markChannelRead,
     markChannelUnread,
     markMessageRead,
     isThreadMuted,
@@ -485,8 +486,7 @@ export function ChannelScreen({
       timelineMessages.find((message) => message.id === editTargetId) ?? null,
     [editTargetId, timelineMessages],
   );
-  // Event id awaiting the empty-edit "Delete message?" confirmation (non-null
-  // while the dialog is open); see handleEditSave.
+  // Event id awaiting the empty-edit deletion confirmation.
   const [emptyDeleteId, setEmptyDeleteId] = React.useState<string | null>(null);
   const {
     handleCancelEdit,
