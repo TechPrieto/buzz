@@ -110,6 +110,8 @@ type TimelineMessageListProps = {
   hideDayDividers?: boolean;
   /** Show speaker identity on every row instead of grouping consecutive messages. */
   alwaysShowMessageIdentity?: boolean;
+  /** Hide agent access-policy badges in the purpose-built Huddle chat. */
+  hideAgentAccessBadges?: boolean;
   /**
    * True when the loaded window provably starts at the channel's beginning.
    * Proves the oldest loaded day's boundary so its divider may render.
@@ -162,6 +164,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   historyExhausted = false,
   hideDayDividers = false,
   alwaysShowMessageIdentity = false,
+  hideAgentAccessBadges = false,
   useVirtualizer = false,
   onStartReached,
   onAtBottomStateChange,
@@ -252,6 +255,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               highlightedMessageId={highlightedMessageId}
               huddleMemberPubkeys={huddleMemberPubkeys}
               huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+              hideAgentAccessBadges={hideAgentAccessBadges}
               isContinuation={
                 alwaysShowMessageIdentity ? false : item.isContinuation
               }
@@ -292,6 +296,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       highlightedMessageId,
       huddleMemberPubkeys,
       huddleMemberPubkeysPending,
+      hideAgentAccessBadges,
       isFollowingThreadById,
       isMessageUnreadById,
       entranceMessageId,
@@ -720,6 +725,7 @@ type MessageRowItemProps = Pick<
   | "highlightedMessageId"
   | "huddleMemberPubkeys"
   | "huddleMemberPubkeysPending"
+  | "hideAgentAccessBadges"
   | "isFollowingThreadById"
   | "onDelete"
   | "onEdit"
@@ -754,6 +760,7 @@ function MessageRowItem({
   highlightedMessageId,
   huddleMemberPubkeys,
   huddleMemberPubkeysPending,
+  hideAgentAccessBadges,
   isContinuation = false,
   isFollowedByContinuation = false,
   isFollowingThreadById,
@@ -800,6 +807,7 @@ function MessageRowItem({
           hoverBackground={false}
           huddleMemberPubkeys={huddleMemberPubkeys}
           huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+          hideAgentAccessBadge={hideAgentAccessBadges}
           isFollowingThread={
             isFollowingThreadById
               ? isFollowingThreadById(message.id)
@@ -857,6 +865,7 @@ function MessageRowItem({
         highlighted={message.id === highlightedMessageId || isSearchActive}
         huddleMemberPubkeys={huddleMemberPubkeys}
         huddleMemberPubkeysPending={huddleMemberPubkeysPending}
+        hideAgentAccessBadge={hideAgentAccessBadges}
         isContinuation={isContinuation}
         isUnread={isUnread}
         playEntrance={playEntrance}

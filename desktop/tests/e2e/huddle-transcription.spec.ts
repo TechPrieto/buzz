@@ -334,6 +334,11 @@ test("speaks the first eligible agent reply with its participant identity", asyn
       text: "This first reply should be spoken.",
       speakerPubkey: TEST_IDENTITIES.alice.pubkey,
     });
+  await expect(
+    page.getByRole("img", {
+      name: "Anyone can send instructions to this agent",
+    }),
+  ).toHaveCount(0);
 });
 
 test("animates the responding agent with the shared speaker ring", async ({
@@ -470,6 +475,49 @@ test("assigns distinct agent voices and exposes compact per-agent controls", asy
       agentPubkey: TEST_IDENTITIES.alice.pubkey,
       voiceKey: "pocket:jane",
     });
+});
+
+test("adds channel-mentioned agents to the live huddle roster", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    windowLabel: `huddle-${HUDDLE_CHANNEL_ID}`,
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      members: [
+        { pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" },
+        { pubkey: TEST_IDENTITIES.alice.pubkey, role: "bot" },
+      ],
+    },
+  });
+  await page.goto("/");
+
+  const participantTiles = page.getByTestId("huddle-participant-tile");
+  await expect(participantTiles).toHaveCount(2);
+  const result = await page.evaluate(
+    async ({ channelId, pubkey }) =>
+      window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+        "sync_agents_to_active_huddle",
+        {
+          channelId,
+          agentPubkeys: [pubkey],
+        },
+      ),
+    {
+      channelId: HUDDLE_PARENT_ID,
+      pubkey: TEST_IDENTITIES.bob.pubkey,
+    },
+  );
+
+  expect(result).toEqual({
+    matched_active_huddle: true,
+    added: [TEST_IDENTITIES.bob.pubkey],
+  });
+  await expect(participantTiles).toHaveCount(3);
+  await expect(
+    page.getByRole("button", { name: "Voice settings for Bob" }),
+  ).toBeVisible();
 });
 
 test("keeps the colored startup surface while huddle controls connect", async ({

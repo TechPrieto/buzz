@@ -74,6 +74,8 @@ type MessageTimelineProps = {
   hideDayDividers?: boolean;
   /** Show speaker identity on every row instead of grouping consecutive messages. */
   alwaysShowMessageIdentity?: boolean;
+  /** Hide agent access-policy badges in the purpose-built Huddle chat. */
+  hideAgentAccessBadges?: boolean;
   /** Stable context rendered above the timeline, including when it is empty. */
   pinnedIntro?: React.ReactNode;
   isFetchingOlder?: boolean;
@@ -170,6 +172,7 @@ const MessageTimelineBase = React.forwardRef<
     hasComposerOverlay = true,
     hideDayDividers = false,
     alwaysShowMessageIdentity = false,
+    hideAgentAccessBadges = false,
     pinnedIntro,
     hasOlderMessages = true,
     historyExhausted = false,
@@ -651,6 +654,7 @@ const MessageTimelineBase = React.forwardRef<
       historyExhausted={renderedHistoryExhausted}
       hideDayDividers={hideDayDividers}
       alwaysShowMessageIdentity={alwaysShowMessageIdentity}
+      hideAgentAccessBadges={hideAgentAccessBadges}
       threadSummaries={threadSummaries}
       messages={renderedMessages}
       onDelete={onDelete}

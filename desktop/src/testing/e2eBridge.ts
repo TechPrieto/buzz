@@ -10238,6 +10238,39 @@ export function maybeInstallE2eTauriMocks() {
         await emitMockHuddleState();
         return structuredClone(settings);
       }
+      case "sync_agents_to_active_huddle": {
+        const request = payload as {
+          channelId?: string;
+          agentPubkeys?: string[];
+        };
+        if (
+          !mockHuddle ||
+          !request.channelId ||
+          (request.channelId !== mockHuddle.state.parent_channel_id &&
+            request.channelId !== mockHuddle.state.ephemeral_channel_id)
+        ) {
+          return { matched_active_huddle: false, added: [] };
+        }
+
+        const existingAgents = new Set(
+          mockHuddle.members
+            .filter((member) => member.role === "bot")
+            .map((member) => member.pubkey),
+        );
+        const added: string[] = [];
+        for (const pubkey of request.agentPubkeys ?? []) {
+          if (!pubkey || existingAgents.has(pubkey)) continue;
+          existingAgents.add(pubkey);
+          added.push(pubkey);
+          mockHuddle.members.push({ pubkey, role: "bot" });
+        }
+        refreshMockHuddleMembership(activeConfig);
+        persistMockHuddle();
+        if (added.length > 0) {
+          await emitMockHuddleState();
+        }
+        return { matched_active_huddle: true, added };
+      }
       case "add_agent_to_huddle": {
         const result = activeConfig?.mock?.addAgentToHuddleResult;
         if (!result) {

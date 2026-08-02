@@ -409,7 +409,6 @@ export const ChannelPane = React.memo(function ChannelPane({
     activeChannel?.id ?? null,
   );
   const hasComposerBotActivity = composerWorkingBotPubkeys.length > 0;
-  // Background card mints also reserve the composer activity row.
   const hasCardMintActivity = useCardMintJobs().length > 0;
   const hasComposerBottomActivity =
     hasComposerBotActivity || hasTypingActivity || hasCardMintActivity;
@@ -644,6 +643,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             historyExhausted={historyExhausted}
             hideDayDividers={isHuddleTranscript}
             alwaysShowMessageIdentity={isHuddleTranscript}
+            hideAgentAccessBadges={isHuddleTranscript}
             pinnedIntro={
               isHuddleTranscript ? <HuddleTranscriptIntro /> : undefined
             }

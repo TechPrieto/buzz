@@ -76,7 +76,7 @@ export function AgentVoiceMenu({
       <PopoverTrigger asChild>
         <Button
           aria-label={`Voice settings for ${displayName}`}
-          className="absolute right-1.5 top-1.5 z-20 h-7 w-7 rounded-md bg-background/80 text-foreground/65 shadow-none backdrop-blur-sm hover:bg-background hover:text-foreground"
+          className="absolute right-1.5 top-1.5 z-20 h-7 w-7 rounded-md bg-transparent text-muted-foreground shadow-none hover:bg-muted/70 hover:text-foreground"
           data-testid="huddle-agent-voice-menu-trigger"
           size="icon"
           type="button"

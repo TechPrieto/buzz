@@ -170,14 +170,20 @@ const VAD_FRAME_SAMPLES: usize = 256;
 /// VAD probability threshold — above this is considered speech.
 const VAD_THRESHOLD: f32 = 0.5;
 
+/// Minimum voiced audio needed before an utterance may be decoded.
+/// One earshot false-positive frame is only 16 ms; requiring 192 ms prevents
+/// silence/room-noise blips from reaching Parakeet and becoming hallucinated
+/// transcript text while still preserving short replies such as "yes".
+const MIN_VOICED_FRAMES: usize = 12;
+
 /// How long the worker waits on the audio channel before checking the shutdown flag.
 const RECV_TIMEOUT: Duration = Duration::from_millis(50);
 
-/// 50 ms cooldown after TTS stops before STT re-enables.
+/// 150 ms cooldown after TTS stops before STT re-enables.
 /// Prevents the tail of TTS audio from being transcribed as speech.
-/// Previous value (200 ms) was eating the first word when the user spoke
-/// immediately after the agent finished.
-const TTS_COOLDOWN: Duration = Duration::from_millis(50);
+/// This remains shorter than the previous 200 ms gate that ate the first word,
+/// but is long enough for speaker/AEC tail audio to leave the microphone path.
+const TTS_COOLDOWN: Duration = Duration::from_millis(150);
 
 /// Number of ONNX Runtime intra-op threads used by the offline recognizer.
 ///
@@ -262,6 +268,8 @@ fn stt_worker(
     let mut silence_frames: usize = 0;
     // Whether we're currently in a speech segment.
     let mut in_speech = false;
+    // Number of frames earshot classified as voiced in the current segment.
+    let mut voiced_frames = 0;
     // Timestamp when TTS last stopped — used for the playback-tail cooldown.
     let mut tts_stopped_at: Option<std::time::Instant> = None;
 
@@ -291,10 +299,11 @@ fn stt_worker(
         if let Some(ref ptt) = ptt_active {
             let ptt_now = ptt.load(Ordering::Acquire);
             if ptt_was_active && !ptt_now && in_speech && !speech_buf.is_empty() {
-                flush_to_stt(&speech_buf, &recognizer, &text_tx);
+                flush_to_stt(&speech_buf, voiced_frames, &recognizer, &text_tx);
                 speech_buf.clear();
                 silence_frames = 0;
                 in_speech = false;
+                voiced_frames = 0;
             }
             ptt_was_active = ptt_now;
         }
@@ -328,6 +337,7 @@ fn stt_worker(
                     &mut speech_buf,
                     &mut silence_frames,
                     &mut in_speech,
+                    &mut voiced_frames,
                     &recognizer,
                     &text_tx,
                     &tts_active,
@@ -388,6 +398,7 @@ fn process_16k_samples(
     speech_buf: &mut Vec<f32>,
     silence_frames: &mut usize,
     in_speech: &mut bool,
+    voiced_frames: &mut usize,
     recognizer: &sherpa_onnx::OfflineRecognizer,
     text_tx: &tokio_mpsc::Sender<String>,
     tts_active: &Arc<AtomicBool>,
@@ -424,6 +435,7 @@ fn process_16k_samples(
             *in_speech = false;
             speech_buf.clear();
             *silence_frames = 0;
+            *voiced_frames = 0;
             continue;
         }
 
@@ -436,26 +448,30 @@ fn process_16k_samples(
                 }
                 speech_buf.clear();
                 *silence_frames = 0;
+                *voiced_frames = 0;
                 continue;
             } else {
                 // Cooldown expired — clear the timer and reset all segment state.
                 *tts_stopped_at = None;
                 *in_speech = false;
                 *silence_frames = 0;
+                *voiced_frames = 0;
             }
         }
 
         if is_speech {
             *silence_frames = 0;
             *in_speech = true;
+            *voiced_frames += 1;
             speech_buf.extend_from_slice(&frame);
 
             // OOM guard: flush and reset if the buffer exceeds 30 s of audio.
             if speech_buf.len() >= MAX_SPEECH_SAMPLES {
-                flush_to_stt(speech_buf, recognizer, text_tx);
+                flush_to_stt(speech_buf, *voiced_frames, recognizer, text_tx);
                 speech_buf.clear();
                 *silence_frames = 0;
                 *in_speech = false;
+                *voiced_frames = 0;
             }
         } else if *in_speech {
             // Still accumulate during brief silence gaps.
@@ -468,10 +484,11 @@ fn process_16k_samples(
             // threshold so each natural pause becomes a separate message.
             if ptt_active.is_none() && *silence_frames >= SILENCE_FLUSH_FRAMES {
                 // End of utterance — transcribe.
-                flush_to_stt(speech_buf, recognizer, text_tx);
+                flush_to_stt(speech_buf, *voiced_frames, recognizer, text_tx);
                 speech_buf.clear();
                 *silence_frames = 0;
                 *in_speech = false;
+                *voiced_frames = 0;
             }
         }
         // If not in speech and not accumulating, just discard the frame.
@@ -484,10 +501,11 @@ fn process_16k_samples(
 /// The tokio channel's `blocking_send` is safe to call from sync contexts.
 fn flush_to_stt(
     speech_buf: &[f32],
+    voiced_frames: usize,
     recognizer: &sherpa_onnx::OfflineRecognizer,
     text_tx: &tokio_mpsc::Sender<String>,
 ) {
-    if speech_buf.is_empty() {
+    if speech_buf.is_empty() || !has_enough_voiced_audio(voiced_frames) {
         return;
     }
 
@@ -507,6 +525,10 @@ fn flush_to_stt(
     }
 }
 
+fn has_enough_voiced_audio(voiced_frames: usize) -> bool {
+    voiced_frames >= MIN_VOICED_FRAMES
+}
+
 /// Convert raw bytes (f32 LE) to f32 samples.
 /// Caller should ensure `bytes.len() % 4 == 0`; extra bytes are silently truncated.
 ///
@@ -522,3 +544,15 @@ fn bytes_to_f32(bytes: &[u8]) -> Vec<f32> {
 
 // drain_until_shutdown lives in super (huddle/mod.rs) — shared with tts.rs.
 use super::drain_until_shutdown;
+
+#[cfg(test)]
+mod tests {
+    use super::{has_enough_voiced_audio, MIN_VOICED_FRAMES};
+
+    #[test]
+    fn short_vad_blips_do_not_reach_the_recognizer() {
+        assert!(!has_enough_voiced_audio(1));
+        assert!(!has_enough_voiced_audio(MIN_VOICED_FRAMES - 1));
+        assert!(has_enough_voiced_audio(MIN_VOICED_FRAMES));
+    }
+}

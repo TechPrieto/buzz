@@ -841,6 +841,7 @@ pub fn run() {
             huddle::agent_voice::set_huddle_agent_voice,
             speak_agent_message,
             add_agent_to_huddle,
+            huddle::agents::sync_agents_to_active_huddle,
             check_pipeline_hotstart,
             confirm_huddle_active,
             perform_sidebar_default_haptic,
