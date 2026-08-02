@@ -19,10 +19,8 @@ import { useAppShellLifecycleEffects } from "@/app/useAppShellLifecycleEffects";
 import { useThreadActivityFeedItems } from "@/app/useThreadActivityFeedItems";
 import { useTauriWindowDrag } from "@/app/useTauriWindowDrag";
 import { useWebviewZoomShortcuts } from "@/app/useWebviewZoomShortcuts";
-import {
-  isHuddleBackingChannel,
-  useHuddlePresentation,
-} from "@/app/useHuddlePresentation";
+import { useHuddlePresentation } from "@/app/useHuddlePresentation";
+import { shouldShowSidebarChannel } from "@/app/huddleChannelVisibility";
 import {
   channelsQueryKey,
   useChannelsQuery,
@@ -115,12 +113,11 @@ export function AppShell() {
     handleHuddleStarted,
     handleHuddleVisibilityChange,
     handleSidebarChannelSelect,
-    hiddenHuddleChannelIds,
+    revealedHuddleChannelIds,
     isHuddleCompanionOpen,
     isHuddleDrawerOpen,
     isHuddleRoom,
     isHuddleRoomStarting,
-    isHuddleStartPending,
     showHuddleInMainApp,
     viewHuddleChannel,
   } = useHuddlePresentation();
@@ -257,10 +254,9 @@ export function AppShell() {
       memberChannels.filter(
         (channel) =>
           channel.archivedAt === null &&
-          !hiddenHuddleChannelIds.has(channel.id) &&
-          !(isHuddleStartPending && isHuddleBackingChannel(channel)),
+          shouldShowSidebarChannel(channel, revealedHuddleChannelIds),
       ),
-    [hiddenHuddleChannelIds, isHuddleStartPending, memberChannels],
+    [memberChannels, revealedHuddleChannelIds],
   );
   const hasRestoredCommunityDestinationRef = React.useRef(false);
   React.useEffect(() => {

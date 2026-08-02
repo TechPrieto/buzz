@@ -10,7 +10,6 @@ import {
   channelMessagesKey,
   channelWindowKey,
 } from "@/features/messages/lib/messageQueryKeys";
-import type { Channel } from "@/shared/api/types";
 
 type HuddleTranscriptRouteState = {
   phase:
@@ -25,16 +24,6 @@ type HuddleTranscriptRouteState = {
   huddle_thread_event_id: string | null;
 };
 
-export function isHuddleBackingChannel(channel: Channel): boolean {
-  if (channel.ttlSeconds !== 3_600) return false;
-  const name = channel.name.trim().toLowerCase();
-  return (
-    name === "huddle" ||
-    name.endsWith(" huddle") ||
-    /^huddle-[0-9a-f]{8}$/.test(name)
-  );
-}
-
 export function useHuddlePresentation() {
   const huddleRoomChannelId = huddleWindowChannelId();
   const isHuddleRoom = huddleRoomChannelId !== null;
@@ -42,9 +31,8 @@ export function useHuddlePresentation() {
   const [isHuddleCompanionOpen, setIsHuddleCompanionOpen] =
     React.useState(false);
   const [isHuddleStartPending, setIsHuddleStartPending] = React.useState(false);
-  const [hiddenHuddleChannelIds, setHiddenHuddleChannelIds] = React.useState<
-    ReadonlySet<string>
-  >(() => new Set());
+  const [revealedHuddleChannelIds, setRevealedHuddleChannelIds] =
+    React.useState<ReadonlySet<string>>(() => new Set());
   const activeHuddleChannelIdRef = React.useRef<string | null>(null);
   const huddleCompanionChannelIdRef = React.useRef<string | null>(null);
   const huddleCompanionOpenPromiseRef = React.useRef<Promise<void> | null>(
@@ -155,10 +143,10 @@ export function useHuddlePresentation() {
   const hideHuddleChannel = React.useCallback(
     (ephemeralChannelId: string | null | undefined) => {
       if (!ephemeralChannelId) return;
-      setHiddenHuddleChannelIds((current) => {
-        if (current.has(ephemeralChannelId)) return current;
+      setRevealedHuddleChannelIds((current) => {
+        if (!current.has(ephemeralChannelId)) return current;
         const next = new Set(current);
-        next.add(ephemeralChannelId);
+        next.delete(ephemeralChannelId);
         return next;
       });
     },
@@ -166,10 +154,10 @@ export function useHuddlePresentation() {
   );
   const revealHuddleChannel = React.useCallback(
     (ephemeralChannelId: string) => {
-      setHiddenHuddleChannelIds((current) => {
-        if (!current.has(ephemeralChannelId)) return current;
+      setRevealedHuddleChannelIds((current) => {
+        if (current.has(ephemeralChannelId)) return current;
         const next = new Set(current);
-        next.delete(ephemeralChannelId);
+        next.add(ephemeralChannelId);
         return next;
       });
     },
@@ -387,7 +375,7 @@ export function useHuddlePresentation() {
     handleHuddleStarted,
     handleHuddleVisibilityChange,
     handleSidebarChannelSelect,
-    hiddenHuddleChannelIds,
+    revealedHuddleChannelIds,
     isHuddleCompanionOpen,
     isHuddleDrawerOpen,
     isHuddleRoom,
