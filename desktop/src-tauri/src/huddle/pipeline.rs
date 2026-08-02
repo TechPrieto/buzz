@@ -18,7 +18,6 @@ use uuid::Uuid;
 use crate::app_state::AppState;
 use crate::events;
 
-use super::agents;
 use super::models;
 use super::relay_api::{self, fetch_channel_members, parse_channel_uuid};
 use super::state::{HuddlePhase, HuddleState, VoiceInputMode};
@@ -37,12 +36,11 @@ pub(crate) enum PostConnectOutcome {
 /// the huddle is not active or pipelines are already running.
 #[tauri::command]
 pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), String> {
-    let (is_active, ephemeral_channel_id, parent_channel_id, huddle_generation) = {
+    let (is_active, ephemeral_channel_id, huddle_generation) = {
         let hs = state.huddle()?;
         (
             matches!(hs.phase, HuddlePhase::Connected | HuddlePhase::Active),
             hs.ephemeral_channel_id.clone(),
-            hs.parent_channel_id.clone(),
             hs.huddle_generation,
         )
     };
@@ -123,29 +121,6 @@ pub async fn check_pipeline_hotstart(state: State<'_, AppState>) -> Result<(), S
             }
         };
         if should_refresh {
-            // A mention or membership action in the parent channel should bring
-            // that agent into the live Huddle too. Local mutation paths invoke
-            // the same reconciliation immediately; this relay refresh covers
-            // changes made by another participant or client.
-            if let Some(parent_id) = &parent_channel_id {
-                match fetch_channel_members(parent_id, Some("bot"), &state).await {
-                    Ok(parent_agents) if !parent_agents.is_empty() => {
-                        if let Err(error) =
-                            agents::sync_agents_for_active_huddle(parent_id, parent_agents, &state)
-                                .await
-                        {
-                            eprintln!(
-                                "buzz-desktop: sync parent agents into huddle failed: {error}"
-                            );
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        eprintln!("buzz-desktop: refresh parent huddle agents failed: {error}");
-                    }
-                }
-            }
-
             // Fetch agents (for STT p-tags) before all members (for participant
             // list) so relay membership queries remain ordered.
             // Only update the throttle timestamp when at least one fetch succeeds,

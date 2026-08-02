@@ -520,6 +520,52 @@ test("adds channel-mentioned agents to the live huddle roster", async ({
   ).toBeVisible();
 });
 
+test("does not enroll available agents when sending an ordinary message", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    windowLabel: `huddle-${HUDDLE_CHANNEL_ID}`,
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      members: [{ pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" }],
+    },
+    managedAgents: [
+      {
+        pubkey: TEST_IDENTITIES.alice.pubkey,
+        name: "alice",
+        status: "running",
+      },
+      {
+        pubkey: TEST_IDENTITIES.bob.pubkey,
+        name: "bob",
+        status: "running",
+      },
+    ],
+  });
+  await page.goto("/");
+
+  const participantTiles = page.getByTestId("huddle-participant-tile");
+  await expect(participantTiles).toHaveCount(1);
+  await page.getByTestId("message-input").fill("A message for the room");
+  await page.getByTestId("send-message").click();
+
+  await expect(
+    page
+      .getByTestId("message-row")
+      .filter({ hasText: "A message for the room" }),
+  ).toBeVisible();
+  await expect(participantTiles).toHaveCount(1);
+  expect(
+    await page.evaluate(
+      () =>
+        (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+          (entry) => entry.command === "sync_agents_to_active_huddle",
+        ).length,
+    ),
+  ).toBe(0);
+});
+
 test("keeps the colored startup surface while huddle controls connect", async ({
   page,
 }) => {
