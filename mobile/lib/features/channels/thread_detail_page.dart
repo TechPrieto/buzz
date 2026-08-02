@@ -109,7 +109,15 @@ class ThreadDetailPage extends HookConsumerWidget {
       childrenByParent.putIfAbsent(pid, () => []).add(msg);
     }
 
-    final replies = childrenByParent[threadHead.id] ?? const [];
+    // In a DM the turns of one thread read as a single conversation, so every
+    // descendant of this root is shown in chronological order. A new direct
+    // message still opens its own thread; only this root's turns are merged.
+    final replies = buildThreadReplies(
+      allMsgs,
+      threadHead,
+      childrenByParent,
+      linearize: ref.watch(channelIsDirectMessageProvider(channelId)),
+    );
     final itemScrollController = useMemoized(ItemScrollController.new);
     final itemPositionsListener = useMemoized(ItemPositionsListener.create);
     final didJumpToInitialMessage = useRef(false);

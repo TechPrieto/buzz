@@ -508,14 +508,7 @@ List<TimelineMessage> formatTimeline(
 List<MainTimelineEntry> buildMainTimelineEntries(
   List<TimelineMessage> messages, {
   Map<String, ChannelWindowThreadSummary>? relaySummaries,
-  bool flattenReplies = false,
 }) {
-  if (flattenReplies) {
-    return [
-      for (final message in messages) MainTimelineEntry(message: message),
-    ];
-  }
-
   // Index direct children by parentId.
   final childrenByParent = <String, List<TimelineMessage>>{};
   for (final msg in messages) {
@@ -536,6 +529,38 @@ List<MainTimelineEntry> buildMainTimelineEntries(
           ),
         ),
   ];
+}
+
+/// Replies to show under an open thread head.
+///
+/// [linearize] mirrors the desktop's agent-conversation rule: every descendant
+/// of the same root is presented as one chronological sequence at depth 1,
+/// instead of only the head's direct children with deeper turns hidden behind
+/// nested sub-threads. The flattening is scoped to a single root — it never
+/// merges separate threads of the same channel into one stream, and the NIP-10
+/// parent/reply tags stay untouched in the protocol.
+List<TimelineMessage> buildThreadReplies(
+  List<TimelineMessage> allMessages,
+  TimelineMessage threadHead,
+  Map<String, List<TimelineMessage>> childrenByParent, {
+  bool linearize = false,
+}) {
+  // A nested branch head is not a root, so its descendants keep the normal
+  // parent/child shape even in a linearized conversation.
+  final isRoot = threadHead.rootId == null || threadHead.rootId == threadHead.id;
+  if (!linearize || !isRoot) {
+    return childrenByParent[threadHead.id] ?? const [];
+  }
+
+  final descendants = [
+    for (final message in allMessages)
+      if (message.id != threadHead.id && message.rootId == threadHead.id)
+        message,
+  ]..sort((left, right) {
+    final byTime = left.createdAt.compareTo(right.createdAt);
+    return byTime != 0 ? byTime : left.id.compareTo(right.id);
+  });
+  return descendants;
 }
 
 bool _isBroadcastReply(TimelineMessage message) {

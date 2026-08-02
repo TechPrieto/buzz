@@ -53,7 +53,7 @@ void main() {
     );
   });
 
-  test('optimistic DM replies render linearly and roll back', () async {
+  test('optimistic DM replies stay in their thread and roll back', () async {
     final relaySession = _RecordingRelaySessionNotifier();
     final container = _buildContainer(relaySession, isDirectMessage: true);
     addTearDown(container.dispose);
@@ -63,6 +63,7 @@ void main() {
     relaySession.completeHistory([_event(id: 'root', createdAt: 10)]);
     await _pumpEventQueue();
 
+    final args = ThreadRepliesArgs(channelId: _channelId, rootId: 'root');
     final reply = _event(
       id: 'local-reply',
       createdAt: 20,
@@ -75,15 +76,22 @@ void main() {
     );
     notifier.addLocalMessage(reply);
 
+    // A DM reply belongs to its root's thread, not to the main timeline.
+    // Promoting it would merge separate conversations into one stream.
+    expect(
+      container.read(threadLocalRepliesProvider(args)).map((event) => event.id),
+      ['local-reply'],
+    );
     expect(
       container
           .read(channelMessagesProvider(_channelId))
           .value
           ?.map((event) => event.id),
-      ['root', 'local-reply'],
+      ['root'],
     );
 
     notifier.removeLocalMessage(reply.id);
+    expect(container.read(threadLocalRepliesProvider(args)), isEmpty);
     expect(
       container
           .read(channelMessagesProvider(_channelId))
@@ -93,7 +101,7 @@ void main() {
     );
   });
 
-  test('loads DM replies into the linear websocket timeline', () async {
+  test('loads the full DM history so thread replies stay available', () async {
     final relaySession = _RecordingRelaySessionNotifier();
     final container = _buildContainer(relaySession, isDirectMessage: true);
     addTearDown(container.dispose);

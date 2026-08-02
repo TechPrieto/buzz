@@ -354,7 +354,6 @@ class ChannelDetailPage extends HookConsumerWidget {
                         final entries = buildMainTimelineEntries(
                           messages,
                           relaySummaries: summaries,
-                          flattenReplies: resolvedChannel.isDm,
                         );
                         return _MessageList(
                           entries: entries,

@@ -60,7 +60,6 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   bool _initInFlight = false;
   bool _usingChannelWindow = false;
   bool _initialWindowQueryInFlight = false;
-  bool _isDirectMessage = false;
   bool _loadsFullTimeline = false;
   int _initVersion = 0;
   ChannelWindowStore _windowStore = const ChannelWindowStore.empty();
@@ -86,7 +85,6 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   @override
   AsyncValue<List<NostrEvent>> build() {
     final sessionState = ref.watch(relaySessionProvider);
-    _isDirectMessage = ref.watch(channelIsDirectMessageProvider(channelId));
     _loadsFullTimeline = ref.watch(channelLoadsFullTimelineProvider(channelId));
     ref.onDispose(() {
       _initVersion++;
@@ -338,7 +336,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
   void addLocalMessage(NostrEvent event) {
     ref.read(pendingLocalMessagesProvider(channelId).notifier).add(event);
     final thread = event.threadReference;
-    if (thread.parentId != null && !_isDirectMessage) {
+    if (thread.parentId != null) {
       final rootId = thread.rootId;
       if (rootId == null) {
         throw StateError('Reply ${event.id} has a parent but no thread root.');
@@ -381,7 +379,7 @@ class ChannelMessagesNotifier extends Notifier<AsyncValue<List<NostrEvent>>> {
     if (pending == null) return;
 
     final thread = pending.threadReference;
-    if (thread.parentId != null && !_isDirectMessage) {
+    if (thread.parentId != null) {
       final rootId = thread.rootId;
       if (rootId == null) {
         throw StateError('Reply $eventId has a parent but no thread root.');
