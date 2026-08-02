@@ -118,7 +118,7 @@ pub(super) fn deploy_payload_json_for_current_build(
         effective_provider,
         effective_prompt,
         merged_env,
-        crate::managed_agents::internal_build(),
+        crate::managed_agents::owner_only_access_build(),
     )
 }
 
