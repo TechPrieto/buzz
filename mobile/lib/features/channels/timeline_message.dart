@@ -508,7 +508,14 @@ List<TimelineMessage> formatTimeline(
 List<MainTimelineEntry> buildMainTimelineEntries(
   List<TimelineMessage> messages, {
   Map<String, ChannelWindowThreadSummary>? relaySummaries,
+  bool flattenReplies = false,
 }) {
+  if (flattenReplies) {
+    return [
+      for (final message in messages) MainTimelineEntry(message: message),
+    ];
+  }
+
   // Index direct children by parentId.
   final childrenByParent = <String, List<TimelineMessage>>{};
   for (final msg in messages) {

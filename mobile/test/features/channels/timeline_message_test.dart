@@ -774,6 +774,19 @@ void main() {
   });
 
   group('buildMainTimelineEntries', () {
+    test('flattens thread replies into direct-message timelines', () {
+      final messages = formatTimeline([
+        _textMsg(id: 'a', createdAt: 1000),
+        _replyMsg(id: 'r1', parentId: 'a', createdAt: 2000),
+        _replyMsg(id: 'r2', parentId: 'r1', rootId: 'a', createdAt: 3000),
+      ]);
+
+      final entries = buildMainTimelineEntries(messages, flattenReplies: true);
+
+      expect(entries.map((entry) => entry.message.id), ['a', 'r1', 'r2']);
+      expect(entries.every((entry) => entry.summary == null), isTrue);
+    });
+
     test('returns only root messages', () {
       final messages = formatTimeline([
         _textMsg(id: 'a', createdAt: 1000),
