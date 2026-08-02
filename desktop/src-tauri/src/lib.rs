@@ -458,8 +458,7 @@ pub fn run() {
             }
 
             // Store the AppHandle so huddle commands can emit `huddle-state-changed`
-            // events via `huddle::emit_huddle_state` without threading the handle
-            // through every call site.
+            // events via `huddle::emit_huddle_state` without threading every call site.
             if let Ok(mut guard) = state.app_handle.lock() {
                 *guard = Some(app_handle.clone());
             }

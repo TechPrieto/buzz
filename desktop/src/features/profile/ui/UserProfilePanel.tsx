@@ -159,9 +159,8 @@ export function UserProfilePanel({
     EditAgentFocusTarget | undefined
   >(undefined);
 
-  // Open the Edit Agent dialog when `requestOpenEditAgent(pubkey)` fires from
-  // a card or other non-panel surface (e.g. `ConfigNudgeCard`). Mirrors the
-  // `subscribeOpenCreateAgent` pattern in AgentsView.
+  // Open the Edit Agent dialog when `requestOpenEditAgent(pubkey)` fires
+  // from a card or other non-panel surface. Mirrors `subscribeOpenCreateAgent`.
   React.useEffect(() => {
     if (!pubkey) return;
     // Consume any pending request that arrived before this panel mounted.
@@ -302,11 +301,9 @@ export function UserProfilePanel({
   // Does THIS desktop hold the agent's seckey (or is this an editable persona)?
   // Gates edit (which needs the key) and grants owner access when managed locally.
   const isOwner = resolvedPersona ? true : managedAgentOwner;
-  // Is the viewer the agent's declared owner (NIP-OA `ownerPubkey == me`)? This
-  // is the right signal for viewing owner-scoped data (activity feed, memory):
-  // the relay routes and the client decrypts those frames with the owner's OWN
-  // key, so the agent's seckey is never needed. Computed here (before the gates
-  // that consume it) so visibility keys off declared ownership, not key custody.
+  // Is the viewer the agent's declared owner (NIP-OA `ownerPubkey == me`)?
+  // Computed here (before the gates) so visibility keys off declared ownership,
+  // not key custody; relay routing uses the owner's OWN key, not the agent's.
   const isCurrentUserOwner = ownsAuthorAgent(profile, currentPubkey);
   // The viewer may see owner-scoped data if they declared-own the agent OR they
   // manage it locally (older agents may not advertise an owner pubkey). Every
@@ -401,13 +398,8 @@ export function UserProfilePanel({
     onOpenDm,
   });
 
-  // Open the instance-edit dialog when a managed instance exists; otherwise
-  // fall back to the definition editor for profiles that have a persona but
-  // no running (or stopped) instance yet. The instance dialog already handles
-  // linked agents correctly (inherited values, "edit linked definition" escape
-  // via `onEditLinkedPersona`), so the only case that still routes to the
-  // definition dialog is a definition-only profile where there is nothing to
-  // instance-edit yet.
+  // Open the instance-edit dialog when a managed instance exists; fall back to
+  // the definition editor only for definition-only profiles with no instance.
   const handleEditAgent = React.useCallback(() => {
     if (managedAgent) {
       setEditAgentOpen(true);
