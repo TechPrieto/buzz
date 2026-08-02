@@ -18,8 +18,9 @@ use super::{stt, tts};
 /// (after a 200 ms delay) stops mic capture and flushes the utterance.
 ///
 /// VAD (default): the earshot VAD runs continuously and speech is accumulated
-/// whenever the probability exceeds the threshold. Barge-in is enabled in this
-/// mode.
+/// whenever the probability exceeds the threshold. While local TTS is playing,
+/// mic frames are discarded because VAD has no echo reference with which to
+/// distinguish the app's own playback from a human interruption.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum VoiceInputMode {
@@ -44,6 +45,9 @@ pub struct HuddleState {
     pub phase: HuddlePhase,
     pub parent_channel_id: Option<String>,
     pub ephemeral_channel_id: Option<String>,
+    /// Root event for the huddle's visible parent-channel thread. Transcript
+    /// messages reply here while audio coordination stays ephemeral.
+    pub huddle_thread_event_id: Option<String>,
     /// Cancellation token for the audio relay WS task.
     #[serde(skip)]
     pub audio_ws_cancel: Option<tokio_util::sync::CancellationToken>,
@@ -161,6 +165,7 @@ impl Clone for HuddleState {
             phase: self.phase.clone(),
             parent_channel_id: self.parent_channel_id.clone(),
             ephemeral_channel_id: self.ephemeral_channel_id.clone(),
+            huddle_thread_event_id: self.huddle_thread_event_id.clone(),
             audio_ws_cancel: None,    // Never clone handles.
             audio_relay_pcm_tx: None, // Never clone handles.
             participants: self.participants.clone(),
@@ -190,6 +195,7 @@ impl Default for HuddleState {
             phase: HuddlePhase::Idle,
             parent_channel_id: None,
             ephemeral_channel_id: None,
+            huddle_thread_event_id: None,
             audio_ws_cancel: None,
             audio_relay_pcm_tx: None,
             participants: Vec::new(),

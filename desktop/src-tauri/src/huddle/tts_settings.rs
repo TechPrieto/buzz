@@ -624,6 +624,7 @@ pub async fn preview_pocket_voice(
             cancel,
             &voice_name,
             output_device,
+            None,
         )?;
         pipeline.speak("Hello! This is how I’ll read agent responses.".to_string())?;
         let started = std::time::Instant::now();

@@ -63,13 +63,13 @@ impl SttPipeline {
     ///
     /// `tts_active` is a shared flag set by the TTS pipeline while audio is
     /// playing. The STT worker uses it to:
-    ///   - discard accumulated speech (echo prevention / barge-in gating)
-    ///   - apply a 200 ms cooldown after TTS stops before re-enabling STT
-    ///   - detect barge-in: speech onset during TTS → set `tts_cancel`
+    ///   - discard accumulated speech so local playback cannot feed back into STT
+    ///   - apply a cooldown after TTS stops before re-enabling STT
     ///
-    /// `tts_cancel` (optional) is the TTS pipeline's cancel flag. When the STT
-    /// worker detects speech onset while TTS is active, it sets this flag to
-    /// stop playback immediately (barge-in). Pass `None` if TTS is unavailable.
+    /// Open-mic VAD cannot distinguish a nearby human from the app's own native
+    /// TTS playback because it has no acoustic echo reference. Local mic frames
+    /// therefore never cancel TTS. Push-to-talk and remote participant speech
+    /// remain explicit, reliable barge-in paths.
     ///
     /// `ptt_active` (optional) is the push-to-talk flag. When `Some`, the STT
     /// pipeline only accumulates speech while the flag is true (key held).
@@ -86,7 +86,6 @@ impl SttPipeline {
     pub fn new(
         model_dir: PathBuf,
         tts_active: Arc<AtomicBool>,
-        tts_cancel: Option<Arc<AtomicBool>>,
         ptt_active: Option<Arc<AtomicBool>>,
     ) -> Result<(Self, tokio_mpsc::Receiver<String>), String> {
         let (audio_tx, audio_rx) = mpsc::sync_channel::<Vec<u8>>(AUDIO_QUEUE_DEPTH);
@@ -94,7 +93,6 @@ impl SttPipeline {
         let shutdown = Arc::new(AtomicBool::new(false));
 
         let shutdown_worker = Arc::clone(&shutdown);
-        let tts_cancel_worker = tts_cancel.as_ref().map(Arc::clone);
         let ptt_active_worker = ptt_active.as_ref().map(Arc::clone);
         let handle = thread::Builder::new()
             .name("stt-worker".into())
@@ -105,7 +103,6 @@ impl SttPipeline {
                     text_tx,
                     shutdown_worker,
                     tts_active,
-                    tts_cancel_worker,
                     ptt_active_worker,
                 )
             })
@@ -167,14 +164,6 @@ impl Drop for SttPipeline {
 /// Previous value (28 frames / 450 ms) felt sluggish in conversation.
 const SILENCE_FLUSH_FRAMES: usize = 19;
 
-/// Consecutive VAD speech frames required before triggering barge-in during TTS.
-/// 20 frames × 256 samples / 16 kHz ≈ 320 ms — must be long enough to filter
-/// speaker-to-mic feedback (TTS audio bleeding through the mic) while still
-/// catching real human interruptions. 80 ms (previous: 5 frames) was too
-/// aggressive — laptop speakers without headphones triggered false barge-in
-/// within the first word of TTS playback.
-const BARGE_IN_DEBOUNCE_FRAMES: usize = 20;
-
 /// earshot requires exactly 256 samples per frame at 16 kHz.
 const VAD_FRAME_SAMPLES: usize = 256;
 
@@ -207,7 +196,6 @@ fn stt_worker(
     text_tx: tokio_mpsc::Sender<String>,
     shutdown: Arc<AtomicBool>,
     tts_active: Arc<AtomicBool>,
-    tts_cancel: Option<Arc<AtomicBool>>,
     ptt_active: Option<Arc<AtomicBool>>,
 ) {
     // ── 1. Initialise rubato resampler (48 kHz → 16 kHz, mono) ───────────────
@@ -274,9 +262,7 @@ fn stt_worker(
     let mut silence_frames: usize = 0;
     // Whether we're currently in a speech segment.
     let mut in_speech = false;
-    // Consecutive speech frames seen during TTS — used for barge-in debounce.
-    let mut barge_in_frames: usize = 0;
-    // Timestamp when TTS last stopped — used for the 200 ms cooldown.
+    // Timestamp when TTS last stopped — used for the playback-tail cooldown.
     let mut tts_stopped_at: Option<std::time::Instant> = None;
 
     // ── 5. Main loop ──────────────────────────────────────────────────────────
@@ -342,11 +328,9 @@ fn stt_worker(
                     &mut speech_buf,
                     &mut silence_frames,
                     &mut in_speech,
-                    &mut barge_in_frames,
                     &recognizer,
                     &text_tx,
                     &tts_active,
-                    tts_cancel.as_deref(),
                     &mut tts_stopped_at,
                     ptt_active.as_ref(),
                 );
@@ -387,8 +371,8 @@ fn resample_chunk(resampler: &mut rubato::Fft<f32>, chunk_48k: &[f32]) -> Vec<f3
 /// Flushes to STT when silence exceeds threshold.
 ///
 /// When `tts_active` is set:
-///   - In PTT mode: skip accumulation (PTT press handles TTS cancellation).
-///   - In VAD mode: speech onset triggers barge-in via `tts_cancel`.
+///   - Discard all local mic input so native playback cannot trigger itself.
+///   - In PTT mode, the shortcut handler remains the explicit cancellation path.
 ///   - After TTS stops, a cooldown prevents tail audio from being transcribed.
 ///
 /// When `ptt_active` is `Some`:
@@ -404,11 +388,9 @@ fn process_16k_samples(
     speech_buf: &mut Vec<f32>,
     silence_frames: &mut usize,
     in_speech: &mut bool,
-    barge_in_frames: &mut usize,
     recognizer: &sherpa_onnx::OfflineRecognizer,
     text_tx: &tokio_mpsc::Sender<String>,
     tts_active: &Arc<AtomicBool>,
-    tts_cancel: Option<&AtomicBool>,
     tts_stopped_at: &mut Option<std::time::Instant>,
     ptt_active: Option<&Arc<AtomicBool>>,
 ) {
@@ -433,35 +415,12 @@ fn process_16k_samples(
 
         let tts_playing = tts_active.load(Ordering::Acquire);
 
-        // While TTS is playing: skip accumulation (echo prevention).
+        // While TTS is playing, discard local mic input. The native TTS output
+        // is not available as an echo-cancellation reference to this worker, so
+        // VAD cannot reliably tell speaker feedback from a human interruption.
+        // Push-to-talk and remote participant audio provide the intentional
+        // cancellation paths instead.
         if tts_playing {
-            if ptt_active.is_some() {
-                // PTT mode — PTT press handles TTS cancellation directly
-                // (via the global shortcut handler). Just skip accumulation.
-                *in_speech = false;
-                *barge_in_frames = 0;
-                speech_buf.clear();
-                *silence_frames = 0;
-                continue;
-            }
-
-            // VAD mode — barge-in detection.
-            // Without acoustic echo cancellation, this requires a longer
-            // debounce (BARGE_IN_DEBOUNCE_FRAMES ≈ 320 ms) to filter
-            // speaker-to-mic feedback.
-            if is_speech {
-                *barge_in_frames += 1;
-                if *barge_in_frames >= BARGE_IN_DEBOUNCE_FRAMES {
-                    // Real speech detected during TTS — trigger barge-in.
-                    if let Some(cancel) = tts_cancel {
-                        cancel.store(true, Ordering::Release);
-                    }
-                    *barge_in_frames = 0;
-                }
-            } else {
-                *barge_in_frames = 0;
-            }
-            // Don't accumulate speech during TTS (echo prevention).
             *in_speech = false;
             speech_buf.clear();
             *silence_frames = 0;
@@ -477,14 +436,12 @@ fn process_16k_samples(
                 }
                 speech_buf.clear();
                 *silence_frames = 0;
-                *barge_in_frames = 0;
                 continue;
             } else {
                 // Cooldown expired — clear the timer and reset all segment state.
                 *tts_stopped_at = None;
                 *in_speech = false;
                 *silence_frames = 0;
-                *barge_in_frames = 0;
             }
         }
 

@@ -30,6 +30,7 @@ pub(super) type CancelSignals<'a> = (&'a AtomicBool, &'a AtomicBool);
 pub(super) struct QueuedText {
     pub(super) generation: u64,
     pub(super) route_id: u64,
+    pub(super) speaker_pubkey: Option<String>,
     pub(super) text: String,
 }
 
@@ -40,11 +41,17 @@ pub(crate) struct TtsTextSender {
 }
 
 impl TtsTextSender {
-    pub(crate) fn send(&self, route_id: u64, text: String) -> Result<(), String> {
+    pub(crate) fn send(
+        &self,
+        route_id: u64,
+        speaker_pubkey: String,
+        text: String,
+    ) -> Result<(), String> {
         self.text_tx
             .send(QueuedText {
                 generation: self.generation,
                 route_id,
+                speaker_pubkey: Some(speaker_pubkey),
                 text,
             })
             .map_err(|error| error.to_string())

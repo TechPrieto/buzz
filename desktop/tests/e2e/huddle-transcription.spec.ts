@@ -1,9 +1,33 @@
 import { expect, test } from "@playwright/test";
 
+import {
+  KIND_HUDDLE_ENDED,
+  KIND_HUDDLE_STARTED,
+} from "../../src/shared/constants/kinds";
 import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 const HUDDLE_CHANNEL_ID = "11111111-1111-4111-8111-111111111111";
 const HUDDLE_PARENT_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
+const HUDDLE_THREAD_ROOT_ID = "mock-general-welcome";
+
+async function waitForMockLiveSubscription(
+  page: import("@playwright/test").Page,
+  channelName: string,
+  kind?: number,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ kind, name }) =>
+          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: name,
+            kind,
+          }) ?? false,
+        { kind, name: channelName },
+      ),
+    )
+    .toBe(true);
+}
 
 async function setHuddleSnapshot(
   page: import("@playwright/test").Page,
@@ -38,9 +62,53 @@ async function setHuddleSnapshot(
   );
 }
 
-test("renders authoritative huddle snapshots and sends explicit off once", async ({
-  page,
-}) => {
+async function installFakeHuddleMicrophone(
+  page: import("@playwright/test").Page,
+) {
+  await page.addInitScript(() => {
+    const mediaDevices = navigator.mediaDevices ?? ({} as MediaDevices);
+    if (!navigator.mediaDevices) {
+      Object.defineProperty(navigator, "mediaDevices", {
+        configurable: true,
+        value: mediaDevices,
+      });
+    }
+
+    Object.defineProperty(mediaDevices, "enumerateDevices", {
+      configurable: true,
+      value: async () => [
+        {
+          deviceId: "mock-huddle-microphone",
+          groupId: "mock-huddle-audio",
+          kind: "audioinput",
+          label: "Mock Huddle Microphone",
+          toJSON() {
+            return this;
+          },
+        } as MediaDeviceInfo,
+      ],
+    });
+    Object.defineProperty(mediaDevices, "getUserMedia", {
+      configurable: true,
+      value: async () => {
+        const context = new AudioContext({ sampleRate: 48_000 });
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const destination = context.createMediaStreamDestination();
+        gain.gain.value = 0;
+        oscillator.connect(gain);
+        gain.connect(destination);
+        oscillator.start();
+        return destination.stream;
+      },
+    });
+  });
+}
+
+test("keeps the drawer open until the huddle is expanded", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("buzz-theme", "buzz-dark");
+  });
   await installMockBridge(page, {
     huddle: {
       parentChannelId: HUDDLE_PARENT_ID,
@@ -55,98 +123,402 @@ test("renders authoritative huddle snapshots and sends explicit off once", async
 
   await page.goto("/");
 
+  const gradientUnderlay = page.locator(".buzz-theme-gradient-underlay");
+  const openGradient = await gradientUnderlay.evaluate(
+    (element) => getComputedStyle(element).backgroundImage,
+  );
+  expect(openGradient).not.toBe("none");
+
   const transcriptButton = page.getByRole("button", {
     name: "Stop transcript",
   });
   await expect(transcriptButton).toBeVisible();
-  await expect(transcriptButton).toHaveAttribute("aria-pressed", "true");
-  const activeBackground = await transcriptButton.evaluate(
-    (button) => getComputedStyle(button).backgroundColor,
-  );
+  await expect(page.getByTestId("profile-huddle-control")).toHaveCount(0);
   await page
-    .getByRole("button", { name: "Show huddle participants (2)" })
+    .getByRole("button", { name: "Open huddle in a new window" })
     .click();
-  await expect(
-    page.getByRole("button", { name: /Remove .* from huddle/ }),
-  ).toHaveCount(1);
-  await page.keyboard.press("Escape");
-
-  await setHuddleSnapshot(
-    page,
-    [{ pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" }],
-    true,
-  );
-  await expect(
-    page.getByRole("button", { name: "Show huddle participants (1)" }),
-  ).toBeVisible();
-  await expect(transcriptButton).toHaveAttribute("aria-pressed", "true");
-
-  await setHuddleSnapshot(
-    page,
-    [
-      { pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" },
-      { pubkey: TEST_IDENTITIES.alice.pubkey, role: "bot" },
-    ],
-    true,
-  );
-  await expect(transcriptButton).toHaveAttribute("aria-pressed", "true");
-
-  await transcriptButton.click();
-  await expect(
-    page.getByRole("button", { name: "Start transcript" }),
-  ).toHaveAttribute("aria-pressed", "false");
-  const inactiveTranscriptButton = page.getByRole("button", {
-    name: "Start transcript",
-  });
-  await expect
-    .poll(() =>
-      inactiveTranscriptButton.evaluate(
-        (button) => getComputedStyle(button).backgroundColor,
-      ),
-    )
-    .not.toBe(activeBackground);
-
-  const explicitToggleCommands = await page.evaluate(() =>
-    (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
-      (entry) => entry.command === "set_huddle_transcription_enabled",
-    ),
-  );
-  expect(explicitToggleCommands).toEqual([
-    {
-      command: "set_huddle_transcription_enabled",
-      payload: { enabled: false },
-    },
-  ]);
-
-  await page.reload();
-  await expect(
-    page.getByRole("button", { name: "Start transcript" }),
-  ).toHaveAttribute("aria-pressed", "false");
-  await expect(
-    page.getByRole("button", { name: "Show huddle participants (2)" }),
-  ).toBeVisible();
   await expect
     .poll(() =>
       page.evaluate(
         () =>
           (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
-            (entry) => entry.command === "set_huddle_transcription_enabled",
+            (entry) => entry.command === "open_huddle_window",
           ).length,
       ),
     )
-    .toBe(0);
-
-  await setHuddleSnapshot(
-    page,
-    [{ pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" }],
-    false,
+    .toBe(1);
+  const huddleControl = page.getByTestId("profile-huddle-control");
+  await expect(huddleControl).toBeVisible();
+  const mainContentSurface = page.locator(
+    "[data-buzz-content-surface]:not([data-buzz-content-unframed])",
   );
+  await expect(mainContentSurface).toBeVisible();
+  const [mainContentColor, huddleCardColor] = await Promise.all([
+    mainContentSurface.evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    ),
+    huddleControl.evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    ),
+  ]);
+  expect(huddleCardColor).toBe(mainContentColor);
+  await expect(huddleControl).toHaveCSS("border-top-width", "1px");
+  await expect(huddleControl).toContainText("In a huddle");
+  await expect(huddleControl).toContainText("#general");
+  const compactMicButton = huddleControl.getByRole("button", {
+    name: /microphone/i,
+  });
+  await expect(compactMicButton).toBeVisible();
+  const [micContainerRadius, micHoverRadius] = await Promise.all([
+    compactMicButton
+      .locator("..")
+      .evaluate((element) => getComputedStyle(element).borderTopLeftRadius),
+    compactMicButton.evaluate(
+      (element) => getComputedStyle(element).borderTopLeftRadius,
+    ),
+  ]);
+  expect(micHoverRadius).toBe(micContainerRadius);
+  await expect(huddleControl).toContainText("Leave");
   await expect(
-    page.getByRole("button", { name: "Show huddle participants (1)" }),
+    huddleControl.getByRole("button", { name: /huddle speaker/i }),
+  ).toHaveCount(0);
+  await expect(transcriptButton).toHaveCount(0);
+  await huddleControl
+    .getByRole("button", { name: "Open huddle window" })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+            (entry) => entry.command === "open_huddle_window",
+          ).length,
+      ),
+    )
+    .toBe(2);
+  await huddleControl.getByRole("button", { name: "Leave huddle" }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+            (entry) => entry.command === "leave_huddle",
+          ).length,
+      ),
+    )
+    .toBe(1);
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "false",
+  );
+  const closedGradient = await gradientUnderlay.evaluate(
+    (element) => getComputedStyle(element).backgroundImage,
+  );
+  expect(closedGradient).toBe(openGradient);
+});
+
+test("shows speaker identity on every huddle chat message", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    windowLabel: `huddle-${HUDDLE_CHANNEL_ID}`,
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      huddleThreadEventId: HUDDLE_THREAD_ROOT_ID,
+      members: [
+        { pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" },
+        { pubkey: TEST_IDENTITIES.alice.pubkey, role: "bot" },
+      ],
+      transcriptionEnabled: true,
+    },
+    mock: { threadRepliesDelayMs: 1_500 },
+  });
+  await page.goto("/");
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => window.__TAURI_INTERNALS__?.metadata.currentWindow.label,
+      ),
+    )
+    .toBe(`huddle-${HUDDLE_CHANNEL_ID}`);
+  await expect(page.getByTestId("huddle-transcript-intro")).toBeVisible();
+  await expect(page.getByTestId("message-thread-replies-loading")).toHaveCount(
+    0,
+  );
+  const transcriptTopGap = await page.evaluate(() => {
+    const participantStrip = document.querySelector(
+      '[data-testid="huddle-participant-strip"]',
+    );
+    const participantTray = participantStrip?.closest("header");
+    const transcriptIntro = document.querySelector(
+      '[data-testid="huddle-transcript-intro"]',
+    );
+    if (!participantTray || !transcriptIntro) return null;
+    return Math.round(
+      transcriptIntro.getBoundingClientRect().top -
+        participantTray.getBoundingClientRect().bottom,
+    );
+  });
+  expect(transcriptTopGap).toBe(16);
+  await waitForMockLiveSubscription(page, "huddle");
+  await page.evaluate(() => {
+    const threadRoot = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "huddle",
+      content: "First huddle message",
+    });
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "huddle",
+      content: "Second huddle message",
+    });
+    if (!threadRoot) throw new Error("Failed to create Huddle thread root.");
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "huddle",
+      content: "Agent response flattened into the huddle chat",
+      parentEventId: threadRoot.id,
+      pubkey: "deadbeef".repeat(8),
+    });
+  });
+
+  for (const content of [
+    "First huddle message",
+    "Second huddle message",
+    "Agent response flattened into the huddle chat",
+  ]) {
+    const row = page.getByTestId("message-row").filter({ hasText: content });
+    await expect(row).toBeVisible();
+    await expect(row.locator('[data-testid^="message-avatar-"]')).toBeVisible();
+    await expect(row.getByTestId("message-author")).toBeVisible();
+    await expect(row.getByTestId("message-timestamp")).toBeVisible();
+  }
+  await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
+});
+
+test("speaks the first eligible agent reply with its participant identity", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      members: [
+        { pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" },
+        { pubkey: TEST_IDENTITIES.alice.pubkey, role: "bot" },
+      ],
+      ttsEnabled: true,
+    },
+  });
+  await page.goto("/");
+  await waitForMockLiveSubscription(page, "huddle");
+
+  await page.evaluate((agentPubkey) => {
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "huddle",
+      content: "This first reply should be spoken.",
+      pubkey: agentPubkey,
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).find(
+            (entry) => entry.command === "speak_agent_message",
+          )?.payload,
+      ),
+    )
+    .toMatchObject({
+      text: "This first reply should be spoken.",
+      speakerPubkey: TEST_IDENTITIES.alice.pubkey,
+    });
+});
+
+test("animates the responding agent with the shared speaker ring", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    windowLabel: `huddle-${HUDDLE_CHANNEL_ID}`,
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      members: [
+        { pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" },
+        { pubkey: TEST_IDENTITIES.alice.pubkey, role: "bot" },
+      ],
+    },
+  });
+  await page.goto("/");
+
+  const agentAvatar = page
+    .getByTestId("huddle-participant-strip")
+    .locator(".buzz-huddle-speaking-avatar")
+    .nth(1);
+  await expect(agentAvatar).toBeVisible();
+  await page.evaluate(async (pubkey) => {
+    await window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
+      pubkey,
+      level: 0.8,
+    });
+  }, TEST_IDENTITIES.alice.pubkey);
+  await expect
+    .poll(() =>
+      agentAvatar.evaluate((element) =>
+        element.style.getPropertyValue("--buzz-huddle-speaker-opacity"),
+      ),
+    )
+    .toBe("0.890");
+
+  await page.evaluate(async () => {
+    await window.__BUZZ_E2E_EMIT_MOCK_HUDDLE_TTS_SPEAKER__?.({
+      pubkey: null,
+      level: 0,
+    });
+  });
+  await expect
+    .poll(() =>
+      agentAvatar.evaluate((element) =>
+        element.style.getPropertyValue("--buzz-huddle-speaker-opacity"),
+      ),
+    )
+    .toBe("0");
+});
+
+test("keeps the colored startup surface while huddle controls connect", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    windowLabel: `huddle-${HUDDLE_CHANNEL_ID}`,
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      phase: "connected",
+      members: [{ pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" }],
+    },
+  });
+  await page.goto("/");
+
+  await expect(page.getByTestId("huddle-starting-view")).toBeVisible();
+  await expect(
+    page.getByRole("status", { name: "Starting huddle" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Start transcript" }),
-  ).toHaveAttribute("aria-pressed", "false");
+    page.getByTestId("huddle-starting-view").locator(".bee-sprite"),
+  ).toBeVisible();
+  await expect(page.getByTestId("setup-grainient-background")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Leave huddle" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("message-thread-loading")).toHaveCount(0);
+  await expect(page.getByTestId("huddle-participant-strip")).toHaveCount(0);
+  await expect(page.getByTestId("huddle-transcript-intro")).toHaveCount(0);
+});
+
+test("returns the companion transcript to the same channel in the main app", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      huddleThreadEventId: HUDDLE_THREAD_ROOT_ID,
+      members: [{ pubkey: TEST_IDENTITIES.tyler.pubkey, role: "member" }],
+      transcriptionEnabled: true,
+    },
+  });
+  await page.goto("/");
+
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "true",
+  );
+  await page.evaluate(() => {
+    const threadRoot = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "huddle",
+      content: "Transcript written while the companion is open",
+    });
+    if (!threadRoot) throw new Error("Failed to create Huddle thread root.");
+    window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+      channelName: "huddle",
+      content: "Agent reply preserved across the Huddle handoff",
+      parentEventId: threadRoot.id,
+      pubkey: "deadbeef".repeat(8),
+    });
+  });
+
+  await page
+    .getByRole("button", { name: "Open huddle in a new window" })
+    .click();
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "false",
+  );
+  await page.evaluate(async () => {
+    await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
+  });
+
+  await expect(page).toHaveURL(
+    new RegExp(`/channels/${HUDDLE_CHANNEL_ID.replaceAll("-", "\\-")}`),
+  );
+  await expect(
+    page
+      .getByTestId("message-row")
+      .filter({ hasText: "Transcript written while the companion is open" }),
+  ).toBeVisible();
+  await expect(
+    page
+      .getByTestId("message-row")
+      .filter({ hasText: "Agent reply preserved across the Huddle handoff" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
+
+  await page
+    .getByRole("button", { name: "Open huddle in a new window" })
+    .click();
+  await expect(page).toHaveURL(
+    new RegExp(`/channels/${HUDDLE_PARENT_ID.replaceAll("-", "\\-")}`),
+  );
+  await expect(
+    page.locator(`[data-channel-id="${HUDDLE_CHANNEL_ID}"]`),
+  ).toHaveCount(0);
+});
+
+test("keeps the huddle avatar strip compact and exposes the full roster", async ({
+  page,
+}) => {
+  const members = Array.from({ length: 11 }, (_, index) => ({
+    pubkey: `${(index + 1).toString(16).padStart(2, "0")}${"a".repeat(62)}`,
+    role: index === 10 ? ("bot" as const) : ("member" as const),
+  }));
+
+  await installMockBridge(page, {
+    huddle: {
+      parentChannelId: HUDDLE_PARENT_ID,
+      ephemeralChannelId: HUDDLE_CHANNEL_ID,
+      members,
+    },
+  });
+  await page.goto("/");
+
+  const participantStrip = page.getByTestId("huddle-participant-strip");
+  const participantTrigger = page.getByRole("button", {
+    name: "Show all huddle participants (11)",
+  });
+  await expect(participantTrigger).toBeVisible();
+  await expect(
+    participantStrip.getByTestId("huddle-participant-avatar"),
+  ).toHaveCount(9);
+  await expect(participantTrigger).toContainText("+2");
+  await expect(page.getByTestId("profile-huddle-control")).toHaveCount(0);
+
+  await participantTrigger.click();
+  await expect(
+    page.getByRole("heading", { name: "Participants" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /Remove Agent .* from huddle/ }),
+  ).toHaveCount(1);
 });
 
 test("keeps a newer huddle event over a delayed hydration snapshot", async ({
@@ -182,22 +554,53 @@ test("keeps a newer huddle event over a delayed hydration snapshot", async ({
   );
 
   await expect(
-    page.getByRole("button", { name: "Show huddle participants (1)" }),
-  ).toBeVisible();
+    page
+      .getByTestId("huddle-participant-strip")
+      .getByTestId("huddle-participant-avatar"),
+  ).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: /Show all huddle participants/ }),
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Start transcript" }),
   ).toHaveAttribute("aria-pressed", "false");
   await page.waitForTimeout(300);
   await expect(
-    page.getByRole("button", { name: "Show huddle participants (1)" }),
-  ).toBeVisible();
+    page
+      .getByTestId("huddle-participant-strip")
+      .getByTestId("huddle-participant-avatar"),
+  ).toHaveCount(1);
 });
 
-test("starts an agent DM huddle with the agent enrolled", async ({ page }) => {
-  await installMockBridge(page);
+test("starts an agent DM huddle and hides its backing channel after it ends", async ({
+  page,
+}) => {
+  await installFakeHuddleMicrophone(page);
+  await installMockBridge(page, {
+    openHuddleWindowDelayMs: 500,
+    startHuddleReturnDelayMs: 1_500,
+  });
   await page.goto("/");
   await page.getByTestId("channel-alice-tyler").click();
   await expect(page.getByTestId("chat-title")).toHaveText("alice-tyler");
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (pubkey) =>
+          window.__BUZZ_E2E_HAS_MOCK_OWNER_KIND_SUBSCRIPTION__?.({
+            ownerPubkey: pubkey,
+            kind: 44100,
+          }) ?? false,
+        "deadbeef".repeat(8),
+      ),
+    )
+    .toBe(true);
+  const channelReadsBeforeStart = await page.evaluate(
+    () =>
+      (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+        (entry) => entry.command === "get_channels",
+      ).length,
+  );
 
   const startButton = page.getByTestId("channel-start-huddle-trigger");
   await expect(startButton).toBeEnabled();
@@ -216,6 +619,145 @@ test("starts an agent DM huddle with the agent enrolled", async ({ page }) => {
       memberPubkeys: [TEST_IDENTITIES.alice.pubkey],
       parentChannelId: "f48efb06-0c93-5025-aac9-2e646bb6bfa8",
     });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+            (entry) => entry.command === "open_huddle_window",
+          ).length,
+      ),
+    )
+    .toBe(1);
+  const startingState = await page.evaluate(async () =>
+    window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("get_huddle_state"),
+  );
+  expect(startingState).toMatchObject({ phase: "creating" });
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+            (entry) => entry.command === "get_channels",
+          ).length,
+      ),
+    )
+    .toBeGreaterThan(channelReadsBeforeStart);
+  const pendingEphemeralChannelId = await page.evaluate(async () => {
+    const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+      "get_huddle_state",
+    )) as { ephemeral_channel_id: string };
+    return state.ephemeral_channel_id;
+  });
+  await expect(
+    page.locator(`[data-channel-id="${pendingEphemeralChannelId}"]`),
+  ).toHaveCount(0);
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "false",
+  );
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window.__BUZZ_E2E_COMMAND_LOG__ ?? []).filter(
+            (entry) => entry.command === "open_huddle_window",
+          ).length,
+      ),
+    )
+    .toBe(1);
+  await expect(page.getByTestId("profile-huddle-control")).toBeVisible();
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "false",
+  );
+
+  const ephemeralChannelId = await page.evaluate(async () => {
+    const state = (await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.(
+      "get_huddle_state",
+    )) as { ephemeral_channel_id: string };
+    return state.ephemeral_channel_id;
+  });
+  const huddleSidebarChannel = page.locator(
+    `[data-channel-id="${ephemeralChannelId}"]`,
+  );
+  await expect(huddleSidebarChannel).toHaveCount(0);
+  await page.evaluate(async () => {
+    await window.__BUZZ_E2E_INVOKE_MOCK_COMMAND__?.("close_huddle_companion");
+  });
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "true",
+  );
+  await expect(page.getByTestId("profile-huddle-control")).toHaveCount(0);
+  await expect(page).toHaveURL(
+    new RegExp(`/channels/${ephemeralChannelId.replaceAll("-", "\\-")}`),
+  );
+  await expect(huddleSidebarChannel).toBeVisible();
+
+  await page
+    .getByRole("button", { name: "Open huddle in a new window" })
+    .click();
+  await expect(huddleSidebarChannel).toHaveCount(0);
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "false",
+  );
+  await expect(page.getByTestId("profile-huddle-control")).toBeVisible();
+
+  await page.getByRole("button", { name: "Leave huddle" }).click();
+  await expect(huddleSidebarChannel).toHaveCount(0);
+  await expect(page.locator(".buzz-huddle-shell")).toHaveAttribute(
+    "data-huddle-open",
+    "false",
+  );
+
+  await waitForMockLiveSubscription(page, "alice-tyler");
+  const lifecycleCreatedAt = Math.floor(Date.now() / 1000);
+  await page.evaluate(
+    ({ createdAt, ephemeralChannelId, kind }) => {
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "alice-tyler",
+        content: JSON.stringify({ ephemeral_channel_id: ephemeralChannelId }),
+        createdAt,
+        id: "3".repeat(64),
+        kind,
+      });
+    },
+    {
+      createdAt: lifecycleCreatedAt,
+      ephemeralChannelId,
+      kind: KIND_HUDDLE_STARTED,
+    },
+  );
+  await expect(page.getByTestId("huddle-attachment")).toBeVisible();
+  await waitForMockLiveSubscription(page, "alice-tyler", KIND_HUDDLE_ENDED);
+  await page.evaluate(
+    ({ createdAt, ephemeralChannelId, kind }) => {
+      window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+        channelName: "alice-tyler",
+        content: JSON.stringify({ ephemeral_channel_id: ephemeralChannelId }),
+        createdAt,
+        id: "4".repeat(64),
+        kind,
+      });
+    },
+    {
+      createdAt: lifecycleCreatedAt + 1,
+      ephemeralChannelId,
+      kind: KIND_HUDDLE_ENDED,
+    },
+  );
+  const endedHuddle = page
+    .getByTestId("huddle-attachment")
+    .filter({ hasText: "Huddle · Ended" });
+  await expect(endedHuddle).toBeVisible();
+  await endedHuddle.getByRole("button", { name: "View huddle" }).click();
+  await expect(page).toHaveURL(
+    new RegExp(`/channels/${ephemeralChannelId.replaceAll("-", "\\-")}`),
+  );
+  await expect(huddleSidebarChannel).toBeVisible();
+  await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
 });
 
 test("closes add-agent dialog when parent membership is already satisfied", async ({
