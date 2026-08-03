@@ -63,6 +63,12 @@ bytes = "1"
 # MIME type detection via magic bytes — file upload validation
 infer = "0.19"
 
+# Image decode/re-encode — strips EXIF/ICC/XMP metadata from JPEG/PNG before
+# upload so AI-generated images pass the relay's strict metadata policy
+# (mobile/desktop already sanitize on-device; the CLI didn't). Same version
+# buzz-media already pins for the same reason.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
 # URL parsing — extract server domain for Blossom auth tag
 url = { workspace = true }
 
