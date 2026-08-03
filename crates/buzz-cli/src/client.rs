@@ -197,6 +197,106 @@ fn extract_relay_message_field(body: &str) -> Option<String> {
         })
 }
 
+/// Re-encode JPEG/PNG bytes to strip EXIF/ICC/XMP/unknown-chunk metadata
+/// before upload. Passes through unchanged for any other MIME type (GIF,
+/// WebP, video) — those paths weren't the source of the 422s and animated
+/// GIF re-encoding is out of scope here.
+fn sanitize_image_bytes(bytes: Vec<u8>, mime: &str) -> Result<Vec<u8>, CliError> {
+    use image::{ExtendedColorType, ImageEncoder};
+
+    let format = match mime {
+        "image/jpeg" => image::ImageFormat::Jpeg,
+        "image/png" => image::ImageFormat::Png,
+        _ => return Ok(bytes),
+    };
+
+    let img = image::load_from_memory_with_format(&bytes, format).map_err(|e| {
+        CliError::Usage(format!("could not decode {mime} for upload sanitization: {e}"))
+    })?;
+    let color: ExtendedColorType = img.color().into();
+
+    let mut out = Vec::new();
+    match format {
+        image::ImageFormat::Jpeg => {
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+                .write_image(img.as_bytes(), img.width(), img.height(), color)
+                .map_err(|e| CliError::Other(format!("failed to re-encode {mime}: {e}")))?;
+        }
+        image::ImageFormat::Png => {
+            image::codecs::png::PngEncoder::new(&mut out)
+                .write_image(img.as_bytes(), img.width(), img.height(), color)
+                .map_err(|e| CliError::Other(format!("failed to re-encode {mime}: {e}")))?;
+        }
+        _ => unreachable!("format is matched above"),
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod sanitize_image_bytes_tests {
+    use super::sanitize_image_bytes;
+    use image::{ImageEncoder, RgbImage};
+
+    fn png_with_iccp_chunk() -> Vec<u8> {
+        // A real 2x1 PNG plus a synthetic iCCP chunk spliced in after IHDR —
+        // exactly the shape the relay's `validate_png_metadata_free` rejects
+        // as `MetadataForbidden`, and what AI image generators commonly emit
+        // (embedded colour profile).
+        let img = RgbImage::from_pixel(2, 1, image::Rgb([10, 20, 30]));
+        let mut base = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut base)
+            .write_image(img.as_raw(), 2, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+
+        // IHDR is always the first chunk right after the 8-byte signature;
+        // its length is 13 bytes + 12 bytes of framing (len+type+crc) = 25.
+        let ihdr_end = 8 + 25;
+        let iccp_payload = b"fake-icc-profile-data";
+        let mut iccp_chunk = Vec::new();
+        iccp_chunk.extend_from_slice(&(iccp_payload.len() as u32).to_be_bytes());
+        iccp_chunk.extend_from_slice(b"iCCP");
+        iccp_chunk.extend_from_slice(iccp_payload);
+        iccp_chunk.extend_from_slice(&0u32.to_be_bytes()); // CRC is unchecked by our decode-then-reencode
+
+        let mut out = base[..ihdr_end].to_vec();
+        out.extend_from_slice(&iccp_chunk);
+        out.extend_from_slice(&base[ihdr_end..]);
+        out
+    }
+
+    #[test]
+    fn strips_icc_chunk_from_png_and_stays_decodable() {
+        let dirty = png_with_iccp_chunk();
+        assert!(
+            dirty.windows(4).any(|w| w == b"iCCP"),
+            "fixture must actually contain an iCCP chunk"
+        );
+
+        let clean = sanitize_image_bytes(dirty, "image/png").expect("sanitization must succeed");
+        assert!(
+            !clean.windows(4).any(|w| w == b"iCCP"),
+            "re-encoded PNG must not carry the iCCP chunk forward"
+        );
+        // Round-trips as a real image afterward — sanitization didn't corrupt it.
+        let decoded = image::load_from_memory_with_format(&clean, image::ImageFormat::Png)
+            .expect("sanitized PNG must still decode");
+        assert_eq!((decoded.width(), decoded.height()), (2, 1));
+    }
+
+    #[test]
+    fn passes_through_non_image_mime_unchanged() {
+        let bytes = vec![1, 2, 3, 4];
+        let result = sanitize_image_bytes(bytes.clone(), "video/mp4").unwrap();
+        assert_eq!(result, bytes);
+    }
+
+    #[test]
+    fn rejects_undecodable_bytes_claiming_to_be_an_image() {
+        let bogus = vec![0xFF, 0xD8, 0xFF, 0xE0]; // JPEG magic only, no image data
+        assert!(sanitize_image_bytes(bogus, "image/jpeg").is_err());
+    }
+}
+
 fn should_retry_legacy_upload(status: reqwest::StatusCode) -> bool {
     matches!(
         status,
@@ -1117,6 +1217,17 @@ impl BuzzClient {
             return Err(CliError::Usage(format!("unsupported file type: {mime}")));
         }
 
+        // 2b. Strip metadata from JPEG/PNG before upload. The relay's Blossom
+        // media validator rejects any image carrying non-canonical metadata
+        // (EXIF, ICC profile, XMP, unknown chunks) with 422 — a deliberate
+        // anti-leak policy that assumes the client already sanitized on-device
+        // (mobile does this via a native `sanitizeImageForUpload` channel).
+        // The CLI has no on-device encoder, so AI-generated images (which
+        // commonly embed an ICC profile) were rejected before ever reaching
+        // the channel. Re-encoding through the `image` crate drops all
+        // ancillary chunks and produces the same canonical output mobile does.
+        let bytes = sanitize_image_bytes(bytes, &mime)?;
+
         // 3. Size check
         let max = if mime.starts_with("video/") {
             MAX_VIDEO_BYTES
@@ -1640,6 +1751,18 @@ mod retry_policy_tests {
         BuzzClient::new(base_url.to_string(), keys, None, None).unwrap()
     }
 
+    /// A real, fully-decodable 1x1 JPEG — usable as a round-trip fixture for
+    /// `sanitize_image_bytes`, unlike a bare magic-byte stub.
+    fn tiny_jpeg_bytes() -> Vec<u8> {
+        use image::{ImageEncoder, RgbImage};
+        let img = RgbImage::from_pixel(1, 1, image::Rgb([200, 100, 50]));
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+            .write_image(img.as_raw(), 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        out
+    }
+
     fn make_moderation_event(keys: &Keys, kind: u16) -> nostr::Event {
         EventBuilder::new(Kind::Custom(kind), "")
             .sign_with_keys(keys)
@@ -2119,13 +2242,11 @@ mod retry_policy_tests {
         use tokio::io::AsyncReadExt;
         use tokio::io::AsyncWriteExt;
 
-        // Write a minimal JPEG file so MIME detection works.
+        // Write a real, fully-decodable 1x1 JPEG — `upload_file` now decodes and
+        // re-encodes JPEG/PNG to strip metadata before upload, so a bare magic-byte
+        // stub (sufficient before that change) no longer survives sanitization.
         let mut tmp = tempfile::NamedTempFile::new().unwrap();
-        // JPEG magic + JFIF app0 marker: enough for `infer` to detect image/jpeg.
-        let jpeg_header: &[u8] = &[
-            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01,
-        ];
-        tmp.write_all(jpeg_header).unwrap();
+        tmp.write_all(&tiny_jpeg_bytes()).unwrap();
         let file_path = tmp.path().to_str().unwrap().to_string();
 
         let counter = Arc::new(AtomicU32::new(0));

@@ -951,6 +951,7 @@ dependencies = [
  "diffy",
  "dirs",
  "hex",
+ "image",
  "infer",
  "nostr",
  "rand 0.10.1",
