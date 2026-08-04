@@ -373,6 +373,11 @@ pub struct CliArgs {
           value_parser = clap::value_parser!(u32))]
     pub max_turns_per_session: u32,
 
+    /// Scope ACP sessions and queued batches by `(channel_id, root_event_id)`.
+    /// Intended for DM-only runtimes; disabled by default.
+    #[arg(long, env = "BUZZ_ACP_THREAD_SCOPED_SESSIONS")]
+    pub thread_scoped_sessions: bool,
+
     /// Disable automatic presence (online/offline) status.
     #[arg(long, env = "BUZZ_ACP_NO_PRESENCE")]
     pub no_presence: bool,
@@ -519,6 +524,8 @@ pub struct Config {
     pub context_message_limit: u32,
     /// Maximum turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
+    /// Scope sessions and flush batches by `(channel_id, root_event_id)`.
+    pub thread_scoped_sessions: bool,
     pub presence_enabled: bool,
     pub typing_enabled: bool,
     /// Whether NIP-AE agent core memory injection is enabled. When false,
@@ -1064,6 +1071,18 @@ impl Config {
             };
 
         validate_multiple_event_handling(args.multiple_event_handling, args.dedup)?;
+        if args.thread_scoped_sessions
+            && args.multiple_event_handling != MultipleEventHandling::Queue
+        {
+            return Err(ConfigError::ConfigFile(
+                "--thread-scoped-sessions requires --multiple-event-handling=queue so events from different roots cannot be merged".into(),
+            ));
+        }
+        if args.thread_scoped_sessions && args.agents != 1 {
+            return Err(ConfigError::ConfigFile(
+                "--thread-scoped-sessions requires --agents=1 to preserve root affinity".into(),
+            ));
+        }
 
         let config = Config {
             keys,
@@ -1095,6 +1114,7 @@ impl Config {
             config_path: args.config,
             context_message_limit: args.context_message_limit,
             max_turns_per_session: args.max_turns_per_session,
+            thread_scoped_sessions: args.thread_scoped_sessions,
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
             memory_enabled: args.memory && !args.no_memory,
@@ -1468,6 +1488,7 @@ mod tests {
             config_path: PathBuf::from("./buzz-acp.toml"),
             context_message_limit: 12,
             max_turns_per_session: 0,
+            thread_scoped_sessions: false,
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: true,
@@ -2210,6 +2231,55 @@ channels = "ALL"
     fn lazy_pool_defaults_off() {
         let key = "0".repeat(64);
         assert!(!CliArgs::parse_from(["buzz-acp", "--private-key", &key]).lazy_pool);
+    }
+
+    #[test]
+    fn thread_scoped_sessions_are_opt_in() {
+        let key = "0".repeat(64);
+        let default = CliArgs::parse_from(["buzz-acp", "--private-key", &key]);
+        assert!(!default.thread_scoped_sessions);
+
+        let configured = CliArgs::parse_from([
+            "buzz-acp",
+            "--private-key",
+            &key,
+            "--thread-scoped-sessions",
+        ]);
+        assert!(configured.thread_scoped_sessions);
+    }
+
+    #[test]
+    fn thread_scoped_sessions_require_queued_event_handling() {
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--thread-scoped-sessions",
+            "--multiple-event-handling",
+            "owner-interrupt",
+        ])
+        .expect("clap should parse args");
+
+        let error = Config::from_args(args).expect_err("owner-interrupt can merge distinct roots");
+        assert!(error.to_string().contains("multiple-event-handling=queue"));
+    }
+
+    #[test]
+    fn thread_scoped_sessions_require_one_agent() {
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--thread-scoped-sessions",
+            "--multiple-event-handling",
+            "queue",
+            "--agents",
+            "2",
+        ])
+        .expect("clap should parse args");
+
+        let error = Config::from_args(args).expect_err("root affinity needs one ACP worker");
+        assert!(error.to_string().contains("--agents=1"));
     }
 
     #[test]

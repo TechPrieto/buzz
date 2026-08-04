@@ -168,6 +168,9 @@ pub struct EventQueue {
     /// Must be strictly greater than `max_turn_duration` so a turn running to
     /// the hard cap returns via `mark_complete` before the backstop fires.
     in_flight_deadline: Duration,
+    /// Keep events from different NIP-10 roots in separate batches.
+    /// Used by DM runtimes that scope ACP sessions to a conversation root.
+    thread_scoped_batches: bool,
 }
 
 impl EventQueue {
@@ -189,7 +192,14 @@ impl EventQueue {
             cancel_reasons: HashMap::new(),
             withheld_native_steer: HashMap::new(),
             in_flight_deadline: Duration::from_secs(DEFAULT_IN_FLIGHT_DEADLINE_SECS),
+            thread_scoped_batches: false,
         }
+    }
+
+    /// Keep each effective NIP-10 root in its own flush batch.
+    pub fn with_thread_scoped_batches(mut self) -> Self {
+        self.thread_scoped_batches = true;
+        self
     }
 
     /// Set the in-flight backstop deadline from the configured max turn
@@ -333,8 +343,23 @@ impl EventQueue {
         };
 
         // Drain up to MAX_BATCH_EVENTS; leave any remainder in the queue.
+        // In thread-scoped mode, stop before the first event belonging to a
+        // different effective root so one ACP prompt cannot mix DM threads.
         let queue = self.queues.entry(channel_id).or_default();
-        let drain_count = MAX_BATCH_EVENTS.min(queue.len());
+        let drain_count = if self.thread_scoped_batches {
+            let first_root = queue.front().map(|event| effective_root_id(&event.event));
+            queue
+                .iter()
+                .take(MAX_BATCH_EVENTS)
+                .take_while(|event| {
+                    first_root
+                        .as_deref()
+                        .is_some_and(|root| effective_root_id(&event.event) == root)
+                })
+                .count()
+        } else {
+            MAX_BATCH_EVENTS.min(queue.len())
+        };
         let mut events: Vec<BatchEvent> = queue
             .drain(..drain_count)
             .map(|qe| BatchEvent {
@@ -536,10 +561,29 @@ impl EventQueue {
     /// merged prompt is framed correctly. On a double-cancel, the most recent
     /// reason wins.
     ///
-    /// Unlike `requeue_preserve_timestamps`, events are NOT pushed back into
-    /// the generic queue — they are stored separately and merged by
-    /// `flush_next()`. No retry throttle, no backoff.
+    /// In thread-scoped mode, events return to the generic queue so root-aware
+    /// batching can keep them isolated. Otherwise they are stored separately
+    /// and merged by `flush_next()`. No retry throttle, no backoff.
     pub fn requeue_as_cancelled(&mut self, batch: FlushBatch, reason: CancelReason) {
+        if self.thread_scoped_batches {
+            let channel_id = batch.channel_id;
+            let mut replay = batch.cancelled_events;
+            replay.extend(batch.events);
+            let queue = self.queues.entry(channel_id).or_default();
+            for event in replay.into_iter().rev() {
+                queue.push_front(QueuedEvent {
+                    channel_id,
+                    event: event.event,
+                    prompt_tag: event.prompt_tag,
+                    received_at: event.received_at,
+                });
+            }
+            while queue.len() > MAX_PENDING_PER_CHANNEL {
+                queue.pop_back();
+            }
+            return;
+        }
+
         let entry = self.cancelled_batches.entry(batch.channel_id).or_default();
         // Preserve any already-cancelled events from a prior cancel (double-cancel).
         entry.extend(batch.cancelled_events);
@@ -884,6 +928,14 @@ pub fn parse_thread_tags(event: &Event) -> ThreadTags {
         parent_event_id,
         mentioned_pubkeys: mentions,
     }
+}
+
+/// Stable conversation root for session and batch scoping.
+/// Top-level events are their own root; replies use the parsed NIP-10 root.
+pub fn effective_root_id(event: &Event) -> String {
+    parse_thread_tags(event)
+        .root_event_id
+        .unwrap_or_else(|| event.id.to_hex())
 }
 
 /// Extract a leading slash command from message content.
@@ -1275,6 +1327,8 @@ fn format_context_hints(
             if let Some(event_id) = reply_anchor {
                 append_reply_instruction(&mut s, event_id);
             }
+        } else if let Some(event_id) = reply_anchor {
+            append_new_thread_reply_instruction(&mut s, event_id);
         }
         s
     } else if let Some(ref root) = thread_tags.root_event_id {
@@ -1355,6 +1409,8 @@ pub struct FormatPromptArgs<'a> {
     pub channel_info: Option<&'a PromptChannelInfo>,
     pub conversation_context: Option<&'a ConversationContext>,
     pub profile_lookup: Option<&'a PromptProfileLookup>,
+    /// Anchor DM responses to the stable NIP-10 root. Opt-in for staged rollout.
+    pub stable_dm_root_reply: bool,
     /// When true, base_prompt and system_prompt are delivered via the system
     /// role (session/new) and omitted from the user message. When false
     /// (legacy agents), they are injected as `[Base]` and `[System]` sections.
@@ -1463,9 +1519,17 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
     //   - in a thread  → anchor to the thread ROOT (no depth-2 nesting)
     //   - top-level     → anchor to the triggering event (it becomes the root)
     // Agent↔agent turns get no forced anchor — deep nesting is intentional
-    // there. DMs are always 1:1 with a human, so they always anchor.
+    // there. Stable DM anchoring is opt-in so staged rollouts cannot alter
+    // other running harnesses when they next start the shared binary.
     let sender_pubkey = last_event.event.pubkey.to_hex();
-    let reply_anchor = if is_dm {
+    let reply_anchor = if is_dm && args.stable_dm_root_reply {
+        Some(
+            thread_tags
+                .root_event_id
+                .clone()
+                .unwrap_or_else(|| last_event.event.id.to_hex()),
+        )
+    } else if is_dm {
         thread_tags
             .root_event_id
             .is_some()
@@ -1713,6 +1777,44 @@ mod tests {
         // Queue should be empty now.
         assert_eq!(pending_count(&q), 0);
         assert_eq!(q.queues.len(), 0);
+    }
+
+    #[test]
+    fn test_thread_scoped_flush_keeps_distinct_roots_in_separate_batches() {
+        let mut q = EventQueue::new(DedupMode::Queue).with_thread_scoped_batches();
+        let ch = Uuid::new_v4();
+        let root_a = make_event("root a");
+        let root_a_id = root_a.id.to_hex();
+        let reply_a = make_event_with_tags(
+            "reply a",
+            vec![vec![
+                "e".into(),
+                root_a_id.clone(),
+                "".into(),
+                "reply".into(),
+            ]],
+        );
+        let root_b = make_event("root b");
+        let root_b_id = root_b.id.to_hex();
+
+        for event in [root_a, reply_a, root_b] {
+            assert!(q.push(QueuedEvent {
+                channel_id: ch,
+                event,
+                received_at: Instant::now(),
+                prompt_tag: "dm".into(),
+            }));
+        }
+
+        let batch_a = q.flush_next().expect("root A batch");
+        assert_eq!(batch_a.events.len(), 2);
+        assert_eq!(effective_root_id(&batch_a.events[0].event), root_a_id);
+        assert_eq!(effective_root_id(&batch_a.events[1].event), root_a_id);
+
+        q.mark_complete(ch);
+        let batch_b = q.flush_next().expect("root B batch");
+        assert_eq!(batch_b.events.len(), 1);
+        assert_eq!(effective_root_id(&batch_b.events[0].event), root_b_id);
     }
 
     #[test]
@@ -3414,6 +3516,46 @@ mod tests {
     }
 
     #[test]
+    fn test_format_prompt_dm_nested_reply_anchors_response_to_root() {
+        let ch = Uuid::new_v4();
+        let event = make_event_with_tags(
+            "one more thing",
+            vec![
+                vec!["e".into(), ROOT_ID.into(), "".into(), "root".into()],
+                vec!["e".into(), TRIGGER_ID.into(), "".into(), "reply".into()],
+            ],
+        );
+        let nested_event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "dm".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let ci = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                channel_info: Some(&ci),
+                stable_dm_root_reply: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        assert!(prompt.contains(&format!("--reply-to {ROOT_ID}")));
+        assert!(!prompt.contains(&format!("--reply-to {nested_event_id}")));
+    }
+
+    #[test]
     fn test_format_prompt_dm_non_reply_hints_get_messages() {
         let ch = Uuid::new_v4();
         let event = make_event("hey there");
@@ -3699,6 +3841,34 @@ mod tests {
     }
 
     #[test]
+    fn test_thread_scoped_requeue_cancelled_does_not_merge_distinct_roots() {
+        let mut q = EventQueue::new(DedupMode::Queue).with_thread_scoped_batches();
+        let ch = Uuid::new_v4();
+        let first_root = make_queued(ch, "root A");
+        let first_root_id = first_root.event.id.to_hex();
+        q.push(first_root);
+
+        let cancelled = q.flush_next().expect("root A should flush");
+        q.requeue_as_cancelled(cancelled, CancelReason::Steer);
+        q.mark_complete(ch);
+
+        let second_root = make_queued(ch, "root B");
+        let second_root_id = second_root.event.id.to_hex();
+        q.push(second_root);
+
+        let first_retry = q.flush_next().expect("root A should retry first");
+        assert_eq!(first_retry.events.len(), 1);
+        assert!(first_retry.cancelled_events.is_empty());
+        assert_eq!(first_retry.events[0].event.id.to_hex(), first_root_id);
+
+        q.mark_complete(ch);
+        let second = q.flush_next().expect("root B should remain separate");
+        assert_eq!(second.events.len(), 1);
+        assert!(second.cancelled_events.is_empty());
+        assert_eq!(second.events[0].event.id.to_hex(), second_root_id);
+    }
+
+    #[test]
     fn test_requeue_as_cancelled_propagates_reason() {
         let mut q = EventQueue::new(DedupMode::Queue);
         let ch = Uuid::new_v4();
@@ -3909,9 +4079,8 @@ mod tests {
         let root_id = "b".repeat(64);
         let event = make_event_with_tags(
             "thanks",
-            vec![vec!["e".into(), root_id, "".into(), "reply".into()]],
+            vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
         );
-        let event_id = event.id.to_hex();
         let batch = FlushBatch {
             channel_id: ch,
             events: vec![BatchEvent {
@@ -3931,14 +4100,52 @@ mod tests {
             &batch,
             &FormatPromptArgs {
                 channel_info: Some(&ci),
+                stable_dm_root_reply: true,
                 ..Default::default()
             },
         )
         .join("\n\n");
         assert!(
-            prompt.contains(&format!("--reply-to {event_id}")),
-            "DM thread reply should include reply instruction"
+            prompt.contains(&format!("--reply-to {root_id}")),
+            "DM thread reply should remain anchored to the stable root"
         );
+    }
+
+    #[test]
+    fn test_non_thread_scoped_dm_reply_keeps_triggering_event_anchor() {
+        let ch = Uuid::new_v4();
+        let root_id = "c".repeat(64);
+        let event = make_event_with_tags(
+            "legacy behavior",
+            vec![vec!["e".into(), root_id.clone(), "".into(), "reply".into()]],
+        );
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "@mention".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let channel_info = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                channel_info: Some(&channel_info),
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        assert!(prompt.contains(&format!("--reply-to {event_id}")));
+        assert!(!prompt.contains(&format!("--reply-to {root_id}")));
     }
 
     #[test]
@@ -4002,6 +4209,39 @@ mod tests {
             !prompt.contains("--reply-to"),
             "DM non-reply should NOT include reply instruction"
         );
+    }
+
+    #[test]
+    fn test_thread_scoped_dm_top_level_anchors_to_triggering_event() {
+        let ch = Uuid::new_v4();
+        let event = make_event("new root");
+        let event_id = event.id.to_hex();
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+        let channel_info = PromptChannelInfo {
+            name: "DM".into(),
+            channel_type: "dm".into(),
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                channel_info: Some(&channel_info),
+                stable_dm_root_reply: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        assert!(prompt.contains(&format!("--reply-to {event_id}")));
     }
 
     #[test]
