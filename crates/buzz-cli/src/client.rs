@@ -60,7 +60,8 @@ pub fn build_imeta_tag(d: &BlobDescriptor) -> Vec<String> {
     tag
 }
 
-/// MIME types accepted for upload.
+/// MIME types recognized as image/video for the size-tier and imeta decision.
+/// Not a security allowlist — see `BLOCKED_MIMES` below.
 const ALLOWED_MIMES: &[&str] = &[
     "image/jpeg",
     "image/png",
@@ -98,6 +99,11 @@ const BLOCKED_MIMES: &[&str] = &[
 
 /// Maximum file size for image uploads (50 MB).
 const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Maximum file size for generic file uploads (100 MB) — matches the relay's
+/// `default_max_file_bytes` (buzz_media::config); the relay enforces the
+/// authoritative cap regardless.
+const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
 /// Maximum file size for video uploads (500 MB).
 const MAX_VIDEO_BYTES: u64 = 500 * 1024 * 1024;
@@ -1240,7 +1246,7 @@ impl BuzzClient {
             .map(|t| t.mime_type().to_string())
             .unwrap_or_else(|| "application/octet-stream".to_string());
 
-        if !ALLOWED_MIMES.contains(&mime.as_str()) {
+        if BLOCKED_MIMES.contains(&mime.as_str()) {
             return Err(CliError::Usage(format!("unsupported file type: {mime}")));
         }
 
@@ -1258,8 +1264,10 @@ impl BuzzClient {
         // 3. Size check
         let max = if mime.starts_with("video/") {
             MAX_VIDEO_BYTES
-        } else {
+        } else if ALLOWED_MIMES.contains(&mime.as_str()) {
             MAX_IMAGE_BYTES
+        } else {
+            MAX_FILE_BYTES
         };
         if bytes.len() as u64 > max {
             return Err(CliError::Usage(format!(
