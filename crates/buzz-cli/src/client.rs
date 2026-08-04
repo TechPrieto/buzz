@@ -69,6 +69,33 @@ const ALLOWED_MIMES: &[&str] = &[
     "video/mp4",
 ];
 
+/// MIME types rejected client-side before upload, mirroring the relay's
+/// generic-file deny-list (`buzz_media::validation::BLOCKED_FILE_MIME_TYPES`).
+/// Anything not in `ALLOWED_MIMES` and not here (docs, archives, text, data)
+/// is sent to `/upload` and handled by the relay's generic-file path, which
+/// does the authoritative magic-byte sniffing and validation server-side —
+/// this list only saves a round trip for the categories we already know the
+/// relay will refuse.
+const BLOCKED_MIMES: &[&str] = &[
+    // Active web content — stored-XSS vectors. `text/html` is intentionally
+    // absent: the relay accepts it on the generic-file path (owner decision,
+    // 2026-08-04 — see BLOCKED_FILE_MIME_TYPES in buzz-media), so mirror that.
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "application/javascript",
+    "text/javascript",
+    // Native executables / installers.
+    "application/x-msdownload", // .exe / .dll
+    "application/x-executable", // ELF
+    "application/vnd.microsoft.portable-executable",
+    "application/x-mach-binary", // Mach-O
+    "application/x-sharedlib",
+    "application/x-elf",
+    "application/x-msi",
+    "application/vnd.android.package-archive", // .apk
+    "application/x-apple-diskimage",           // .dmg
+];
+
 /// Maximum file size for image uploads (50 MB).
 const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
 
