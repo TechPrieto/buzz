@@ -2,14 +2,15 @@ import * as React from "react";
 import { ArrowDown } from "lucide-react";
 
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
-import { orderMentionPubkeysByText } from "@/features/messages/lib/orderMentionPubkeys";
-import { normalizePubkey } from "@/shared/lib/pubkey";
-import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import {
   buildThreadSummaryFromVisibleEntries,
   hasNestedThreadBranches,
   type MainTimelineEntry,
 } from "@/features/messages/lib/threadPanel";
+import {
+  collectThreadAgentAudience,
+  resolveThreadTitle,
+} from "@/features/messages/lib/threadConversation";
 import {
   hasSameMessageAuthor,
   isWithinGroupingWindow,
@@ -513,31 +514,20 @@ export function MessageThreadPanel({
 
   const knownAgentPubkeys = useKnownAgentPubkeys();
   const initialAgentPubkeys = React.useMemo(() => {
-    if (
-      !threadHead ||
-      !currentPubkey ||
-      normalizePubkey(threadHead.signerPubkey ?? threadHead.pubkey ?? "") !==
-        normalizePubkey(currentPubkey)
-    ) {
-      return [];
-    }
-    const { mentionPubkeysByName } = resolveMentionProps(
-      threadHead.tags,
-      profiles,
-    );
-    if (!mentionPubkeysByName) return [];
-
-    return orderMentionPubkeysByText(
-      threadHead.body,
-      mentionPubkeysByName,
+    if (!threadHead || !currentPubkey) return [];
+    return collectThreadAgentAudience(
+      [threadHead, ...threadReplies.map((entry) => entry.message)],
+      currentPubkey,
       (pubkey) =>
         knownAgentPubkeys.has(pubkey) || profiles?.[pubkey]?.isAgent === true,
     );
-  }, [currentPubkey, knownAgentPubkeys, profiles, threadHead]);
+  }, [currentPubkey, knownAgentPubkeys, profiles, threadHead, threadReplies]);
 
   if (!threadHead) {
     return null;
   }
+  const threadTitle =
+    resolveThreadTitle(threadHead.body, threadHead.tags ?? []) ?? "Thread";
 
   const threadScrollRegion = (
     <AuxiliaryPanelBody
@@ -928,7 +918,9 @@ export function MessageThreadPanel({
         leading={headerLeading}
         onBack={isSinglePanelView && !isFocusMode ? onClose : undefined}
       >
-        <AuxiliaryPanelTitle>Thread</AuxiliaryPanelTitle>
+        <AuxiliaryPanelTitle title={threadTitle}>
+          {threadTitle}
+        </AuxiliaryPanelTitle>
       </AuxiliaryPanelHeaderGroup>
     </>
   );

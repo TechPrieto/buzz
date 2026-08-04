@@ -6,6 +6,7 @@ import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
 
 export type MessageComposerProps = {
+  allowNamedThread?: boolean;
   audienceContext?: {
     type: "thread";
     threadRootId: string;

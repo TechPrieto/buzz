@@ -313,6 +313,144 @@ test("thread autocomplete keeps multiple long names readable in a narrow panel",
   }
 });
 
+test("shows agent conversations as one named linear thread", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    managedAgents: [
+      {
+        pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
+        name: "Thread Agent",
+        status: "running",
+      },
+    ],
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await waitForMockLiveSubscription(page, "general");
+
+  const root = await emitMockMessage(
+    page,
+    "general",
+    "Plan agosto — contenido\n\nDefinir el calendario.",
+  );
+  const ownerReply = await emitMockMessage(
+    page,
+    "general",
+    "Prepara la primera versión",
+    { parentEventId: root.id },
+  );
+  await emitMockMessage(page, "general", "Primera versión lista", {
+    parentEventId: ownerReply.id,
+    pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
+  });
+
+  const threadSummary = page.getByTestId("message-thread-summary").last();
+  await expect(threadSummary).toBeVisible();
+  await threadSummary.click();
+
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await expect(threadPanel).toBeVisible();
+  await expect(
+    threadPanel.getByRole("heading", { name: "Plan agosto — contenido" }),
+  ).toBeVisible();
+  await expect(
+    threadPanel.getByText("Prepara la primera versión"),
+  ).toBeVisible();
+  await expect(threadPanel.getByText("Primera versión lista")).toBeVisible();
+  await expect(threadPanel.getByTestId("message-thread-summary")).toHaveCount(
+    0,
+  );
+});
+
+test("publishes an explicit thread name and uses it in the thread header", async ({
+  page,
+}) => {
+  await installMockBridge(page, {
+    managedAgents: [
+      {
+        pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
+        name: "Named Thread Agent",
+        status: "running",
+      },
+    ],
+  });
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+  await waitForMockLiveSubscription(page, "general");
+
+  const composer = page.getByTestId("message-composer");
+  await composer.getByRole("button", { name: "Name thread" }).click();
+  await composer
+    .getByTestId("named-thread-title")
+    .fill("Plan septiembre — lanzamiento");
+  await composer
+    .locator('[contenteditable="true"]')
+    .fill("Opening message whose body is not the title.");
+  await composer.getByTestId("send-message").click();
+
+  const rootRow = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Opening message whose body is not the title." })
+    .last();
+  await expect(rootRow).toBeVisible();
+  const rootId = await rootRow.getAttribute("data-message-id");
+  if (!rootId) throw new Error("Sent named-thread root has no message id.");
+
+  await emitMockMessage(
+    page,
+    "general",
+    "Agent response in the explicitly named thread.",
+    {
+      parentEventId: rootId,
+      pubkey: IN_CHANNEL_MANAGED_AGENT_PUBKEY,
+    },
+  );
+
+  await page.getByTestId("message-thread-summary").last().click();
+  const threadPanel = page.getByTestId("message-thread-panel");
+  await expect(
+    threadPanel.getByRole("heading", {
+      name: "Plan septiembre — lanzamiento",
+    }),
+  ).toBeVisible();
+});
+
+test("preserves a thread name until a deferred non-member send publishes", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByTestId("channel-general").click();
+
+  const composer = page.getByTestId("message-composer");
+  await composer.getByRole("button", { name: "Name thread" }).click();
+  const title = composer.getByTestId("named-thread-title");
+  await title.fill("Seguimiento con invitado");
+
+  const input = composer.locator('[contenteditable="true"]');
+  await input.fill("Loop in @out");
+  await expect(autocomplete(page).getByText("outsider")).toBeVisible();
+  await input.press("Enter");
+  await page.keyboard.type(" please");
+  await composer.getByTestId("send-message").click();
+
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(title).toHaveValue("Seguimiento con invitado");
+
+  await composer.getByTestId("send-message").click();
+  await dialog.getByRole("button", { name: "Do nothing" }).click();
+  await expect(title).toHaveCount(0);
+  await expect(
+    page
+      .getByTestId("message-row")
+      .filter({ hasText: "Loop in @outsider please" })
+      .last(),
+  ).toBeVisible();
+});
+
 test("blocks non-participant persona mentions in DM threads", async ({
   page,
 }) => {

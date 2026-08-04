@@ -119,14 +119,48 @@ test("thread groups are represented by the latest reply rather than the root", (
 
   assert.equal(inboxItem.id, "reply-event");
   assert.equal(inboxItem.preview, "New reply in the thread");
+  assert.equal(inboxItem.threadTitle, "Original thread starter");
   assert.deepEqual(
     inboxItem.groupItems.map((groupItem) => groupItem.id),
     ["root-event", "reply-event"],
   );
   assert.deepEqual(getInboxTypeLabel(inboxItem), {
-    text: "Thread in",
-    channelLabel: "buzz-bugs",
+    text: "Thread",
+    channelLabel: null,
+    threadTitle: "Original thread starter",
   });
+});
+
+test("thread titles prefer the root subject tag over its first content line", () => {
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({
+      activity: [
+        item({
+          id: "root-event",
+          category: "activity",
+          content: "Long opening message\nwith more detail",
+          tags: [
+            ["h", CHANNEL_ID],
+            ["subject", "Plan agosto"],
+          ],
+        }),
+        item({
+          id: "reply-event",
+          category: "activity",
+          content: "Latest reply",
+          createdAt: 2,
+          tags: [
+            ["h", CHANNEL_ID],
+            ["e", "root-event", "", "root"],
+            ["e", "root-event", "", "reply"],
+          ],
+        }),
+      ],
+    }),
+  });
+
+  assert.equal(inboxItem.threadTitle, "Plan agosto");
 });
 
 test("thread groups use the latest row label even when the root was a mention", () => {
@@ -163,8 +197,9 @@ test("thread groups use the latest row label even when the root was a mention", 
     ["root-event", "reply-event"],
   );
   assert.deepEqual(getInboxTypeLabel(inboxItem), {
-    text: "Thread in",
-    channelLabel: "buzz-bugs",
+    text: "Thread",
+    channelLabel: null,
+    threadTitle: "Original mention",
   });
 });
 

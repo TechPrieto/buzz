@@ -53,6 +53,7 @@ type PendingNonMemberMentionSend = {
 };
 
 type SendMessageWithMentionFlowInput = {
+  additionalTags?: string[][];
   capturedChannelId: string | null;
   /** Thread context captured at submit time — null for main-timeline sends. */
   capturedThreadContext?: {
@@ -522,6 +523,7 @@ export function useMentionSendFlow({
             sendChannelId,
             draft.capturedThreadContext,
           );
+
           if (effectiveExplicitAgentPubkeys.length > 0) {
             // Promote only explicitly authored agents that remained effective
             // for this successful send. "Send without inviting" removes its
@@ -572,6 +574,7 @@ export function useMentionSendFlow({
       onPrepareSendChannel,
       onSendRef,
       onSuccessfulExplicitAgentAudience,
+
       resolvePostSendContent,
       richText.setContent,
       setContent,
@@ -639,6 +642,7 @@ export function useMentionSendFlow({
 
   const sendMessageWithMentionFlow = React.useCallback(
     async ({
+      additionalTags,
       capturedChannelId,
       capturedThreadContext = null,
       pendingImeta,
@@ -709,8 +713,11 @@ export function useMentionSendFlow({
           spoileredAttachmentUrls,
         );
         const outgoingTags = mergeOutgoingTags(
-          mediaTags,
-          buildCustomEmojiTags(finalContent, customEmoji),
+          mergeOutgoingTags(
+            mediaTags,
+            buildCustomEmojiTags(finalContent, customEmoji),
+          ),
+          additionalTags ?? [],
         );
         const nonMemberPubkeys = getNonMemberMentionPubkeys(pubkeys);
         let promptNonMemberPubkeys = nonMemberPubkeys.filter(

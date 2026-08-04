@@ -91,7 +91,14 @@ function InboxLabel({
       )}
     >
       <span className="shrink-0">{label.text}</span>
-      {label.channelLabel ? (
+      {label.threadTitle ? (
+        <span
+          className="min-w-0 truncate font-medium text-foreground/80"
+          title={label.threadTitle}
+        >
+          {label.threadTitle}
+        </span>
+      ) : label.channelLabel ? (
         <span
           className={cn(
             MENTION_CHIP_BASE_CLASSES,

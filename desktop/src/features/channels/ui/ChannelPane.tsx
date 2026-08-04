@@ -754,6 +754,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 ) : null}
                 <ComposerDockBackdrop gutterClassName="inset-x-5" />
                 <MessageComposer
+                  allowNamedThread={activeChannel?.channelType !== "dm"}
                   channelId={activeChannel?.id ?? null}
                   channelName={activeChannel?.name ?? "channel"}
                   channelType={activeChannel?.channelType ?? null}

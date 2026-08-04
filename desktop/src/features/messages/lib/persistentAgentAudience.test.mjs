@@ -30,6 +30,15 @@ function savedAudiences() {
   return JSON.parse(window.localStorage.getItem(storageKey));
 }
 
+test("new installs keep addressed agents active inside threads by default", async () => {
+  const store = await loadStore(200);
+  const scope = `${ownerA}:channel-a:thread:root`;
+
+  store.initializePersistentAgentAudience(scope, [agentA]);
+
+  assert.deepEqual(savedAudiences(), { [scope]: [agentA] });
+});
+
 test("conversation scopes isolate identities, channels, and threads", async () => {
   const store = await loadStore();
   const scopes = [
@@ -218,8 +227,19 @@ test("timeline scope is intentionally unsupported", async () => {
   );
 });
 
-test("thread root audience initializes once and explicit clear wins on reopen", async () => {
+test("an empty initial observation leaves the scope unclaimed", async () => {
   const store = await loadStore(10);
+  const scope = `${ownerA}:channel-a:thread:root`;
+
+  store.initializePersistentAgentAudience(scope, []);
+  assert.equal(window.localStorage.getItem(storageKey), null);
+
+  store.initializePersistentAgentAudience(scope, [agentB, agentA]);
+  assert.deepEqual(savedAudiences(), { [scope]: [agentB, agentA] });
+});
+
+test("thread root audience initializes once and explicit clear wins on reopen", async () => {
+  const store = await loadStore(11);
   const scope = `${ownerA}:channel-a:thread:root`;
   store.setPersistentAgentAudienceEnabled(true);
 
