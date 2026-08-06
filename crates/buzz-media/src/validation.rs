@@ -69,19 +69,13 @@ pub(crate) fn looks_like_mp4_iso_bmff(bytes: &[u8]) -> bool {
 /// neutralises them — this allowlist-of-denials is defence in depth, so a future
 /// header regression can't turn an uploaded blob into a stored-XSS vector.
 ///
-/// JS and SVG are the classic stored-XSS carriers. Native executables are
+/// HTML, JS, and SVG are the classic stored-XSS carriers. Native executables are
 /// blocked because there's no legitimate reason to host them inline in chat and
 /// they're a malware-distribution risk (share an executable as a zip instead —
 /// `application/zip` is not on this list).
-///
-/// `text/html` is intentionally *not* blocked: tenant owner decision
-/// (2026-08-04, requested in `#buzz-ops`) accepting the residual risk given the
-/// attachment/nosniff/CSP defence above — legitimate use case is sharing
-/// generated HTML reports/exports. `application/xhtml+xml` stays blocked; it
-/// wasn't part of the request and is rare enough that keeping it out costs
-/// nothing.
 const BLOCKED_FILE_MIME_TYPES: &[&str] = &[
     // Active web content — stored-XSS vectors.
+    "text/html",
     "application/xhtml+xml",
     "image/svg+xml",
     "application/javascript",
@@ -2568,35 +2562,14 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_file_html_accepted_and_forced_to_download() {
-        // HTML is allowed on the generic-file path (owner decision, 2026-08-04)
-        // but must never be eligible for inline rendering — `serve_inline`
-        // forces it to `attachment`, and the response still carries `nosniff`
-        // + `CSP: default-src 'none'` (asserted at the relay response layer,
-        // not here), so an accepted upload can't execute as active content.
+    fn test_validate_file_html_rejected() {
+        // HTML is a stored-XSS carrier — blocked even though headers neutralise it.
         let config = test_config();
         let html = b"<!DOCTYPE html><html><body><script>alert(1)</script></body></html>";
-        let (mime, _ext) = validate_file_content(html, &config).unwrap();
-        assert_eq!(mime, "text/html");
-        assert!(!serve_inline(&mime));
-    }
-
-    #[test]
-    fn test_validate_file_xml_declared_xhtml_is_not_reclassified_as_html() {
-        // `infer` doesn't have a distinct XHTML magic-byte signature — a real
-        // `<?xml ...><html xmlns=...>` document sniffs as `text/xml` (already
-        // unblocked, not part of the 2026-08-04 HTML decision), not
-        // `text/html`. `application/xhtml+xml` stays in BLOCKED_FILE_MIME_TYPES
-        // defensively in case a future `infer` version adds that detection,
-        // but today's coverage for XHTML specifically is this: it must not
-        // come out as `text/html`, which would make it eligible for the
-        // owner's HTML-only allowance under the wrong label.
-        let config = test_config();
-        let xhtml = b"<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"></html>";
-        let result = validate_file_content(xhtml, &config);
+        let result = validate_file_content(html, &config);
         assert!(
-            !matches!(result, Ok((ref m, _)) if m == "text/html"),
-            "xhtml content must never be classified as text/html, got {result:?}"
+            matches!(result, Err(MediaError::DisallowedContentType(ref m)) if m == "text/html"),
+            "expected DisallowedContentType(text/html), got {result:?}"
         );
     }
 

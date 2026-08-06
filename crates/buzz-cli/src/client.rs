@@ -78,9 +78,8 @@ const ALLOWED_MIMES: &[&str] = &[
 /// this list only saves a round trip for the categories we already know the
 /// relay will refuse.
 const BLOCKED_MIMES: &[&str] = &[
-    // Active web content — stored-XSS vectors. `text/html` is intentionally
-    // absent: the relay accepts it on the generic-file path (owner decision,
-    // 2026-08-04 — see BLOCKED_FILE_MIME_TYPES in buzz-media), so mirror that.
+    // Active web content — stored-XSS vectors.
+    "text/html",
     "application/xhtml+xml",
     "image/svg+xml",
     "application/javascript",
