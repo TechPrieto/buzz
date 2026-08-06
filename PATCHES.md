@@ -20,11 +20,18 @@ apply, and still be "merged" in the sense that matters).
 |---|---|---|---|
 | `fix/mobile-dm-messaging` | Scopes mobile DM thread linearity to each root and suppresses nested thread links, so DMs stop showing messages from different threads mixed into one chronological list. | Reported by the team as broken mobile DM UX. | Merged (2026-08-06). |
 | `feat/named-conversation-threads` | Desktop fix: threads created inside a thread now stay flat under the same root instead of nesting a new thread on every reply. | The nested-thread bug the team hit and fixed in our version. | Merged as `08d820cb8` (2026-08-06), desktop suite 3918/3918 passing. |
-| `feat/relay-allow-html-uploads` | Removes `text/html` from the generic file-upload deny-list on the relay + CLI. | Explicit owner decision after being warned of the XSS/phishing risk (files are still served `Content-Disposition: attachment` + `nosniff` + `CSP: default-src 'none'`, so they download rather than render). | Merged (2026-08-06). Was live on the production relay (`buzz-relay:html-fix-2026-08-04`) since 2026-08-04 via a manually-built image, but was NOT in `fork/main` git history until this merge — that gap is closed now. Open, unmerged PR to upstream: `block/buzz#4754`. |
-| `fix/cli-generic-file-upload` | Lets `buzz messages send --file` upload non-image/video files through the generic path. | Needed for the HTML-upload change above to be usable from the CLI. | Merged (2026-08-06), same commit pair as the row above. Open, unmerged PR to upstream: `block/buzz#4753`. |
+| `fix/cli-generic-file-upload` | Lets `buzz messages send --file` upload non-image/video files (docs, archives, text) through the generic path — text/html stays blocked. | Owner need: agents deliver files to the owner for download, not accept HTML uploads. | Merged (2026-08-06). Open, unmerged PR to upstream: `block/buzz#4753`. |
 | `fix/cli-image-upload-422` | Sanitizes JPEG/PNG before upload to avoid relay 422 rejections. | Upload reliability fix. | Merged — landed earlier via a different commit hash than the original branch tip; confirmed present by content (`sanitize_image_bytes` in `crates/buzz-cli/src/client.rs`). |
 | `fix/codex-dm-root-sessions` | Scopes Codex ACP sessions per thread root instead of per session lifetime (`--thread-scoped-sessions`). | Already the deployed behavior on the VPS's `buzz-acp` (frozen there since the 2026-08-04 buzz-ops decision) — was never in `fork/main` git history until now. | Merged (2026-08-06). |
 | `fix/hermes-windows-empty-args` | Stops `hermes-acp`/`amp-acp` from crashing on Windows during model discovery. | Windows compatibility fix. | Merged (2026-08-06). |
+
+**Reverted: `feat/relay-allow-html-uploads`.** Briefly merged and deployed
+2026-08-06 (`buzz-relay:html-fix-2026-08-04`), then reverted the same day —
+owner clarified the actual need was agent-to-owner file delivery, not
+accepting HTML uploads (`9250524b8`, tag `techprieto-v1.2.1`). `text/html` is
+back in both deny-lists (relay + CLI); upstream PR `block/buzz#4754` closed.
+`techprieto-v1.2.0` still has HTML allowed — do not use it for new client
+installs, use `techprieto-v1.2.1` or later.
 
 **Test evidence for the 2026-08-06 batch** (`buzz-media`, `buzz-cli`, `buzz-acp` —
 the only crates touched): 324 + 108 + 671 = 1103 tests passed, 0 failed.
