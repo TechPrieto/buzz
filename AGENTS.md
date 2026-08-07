@@ -32,6 +32,65 @@ access information.
 
 ---
 
+## TechPrieto fork governance — mandatory in `TechPrieto/buzz`
+
+This section applies only when the checkout belongs to
+[`TechPrieto/buzz`](https://github.com/TechPrieto/buzz). It supplements the
+upstream contribution rules above; it does not change `block/buzz`.
+
+### Mental model and ownership
+
+- `block/buzz` is **upstream**: the original Buzz source maintained by Block.
+- `TechPrieto/buzz` is **our fork**: the source used to carry TechPrieto's
+  approved adaptations for its VPS and team.
+- Each repository has a branch named `main`. `upstream/main` means Block's
+  current source; `origin/main` means TechPrieto's stable production reference.
+  They are different branches in different repositories.
+- Abraham owns product intent and production approval. Agents own repository
+  mechanics, testing, documentation, and explaining technical choices in plain
+  Spanish. Do not require Abraham to choose Git branches, commits, or commands.
+
+The concise, owner-facing explanation and release checklist live in
+[`docs/TECHPRIETO_FORK_OPERATIONS.md`](docs/TECHPRIETO_FORK_OPERATIONS.md).
+[`PATCHES.md`](PATCHES.md) is the canonical record of persistent local changes.
+
+### Non-negotiable branch and release rules
+
+1. Configure remotes consistently: `origin` = `TechPrieto/buzz`; `upstream` =
+   `block/buzz`. Confirm this before any fetch, push, or comparison.
+2. Treat `origin/main` as protected: never force-push, rewrite, or rebase it.
+   Work in a dedicated feature or integration branch and merge through a PR.
+3. Before an upstream integration, tag the current validated production commit
+   so rollback is explicit and recoverable.
+4. Select a specific upstream release/tag or audited commit for each
+   integration. Do not absorb a moving `upstream/main` blindly, and do not
+   cherry-pick an upstream feature without checking its dependencies.
+5. New local behavior must be small, tested, and entered in `PATCHES.md` with
+   its purpose, owner need, status, upstream disposition, and rollback note.
+   If it is broadly useful, open or track an upstream contribution instead of
+   silently carrying it forever.
+6. Do not start a new cross-stack feature (relay, schema, CLI, desktop, or
+   mobile) while an agreed base integration is pending, unless Abraham explicitly
+   prioritizes the feature over that integration.
+
+### Safety, verification, and communication
+
+- Never commit credentials, private keys, `.env` files, recovery material, or
+  production exports. Before a public release, run a full-history secret scan
+  and review GitHub security alerts.
+- A change that adds a migration or Nostr event kind must check upstream for
+  collisions, document its compatibility plan, and prove upgrade/rollback in
+  staging before production.
+- Run the relevant checks for the touched surface; run `just ci` before a PR
+  whenever the environment supports it. Relay/database/auth changes also need
+  `just test` and a staging migration check.
+- Do not deploy merely because a branch or PR is green. Report, in plain
+  Spanish: what changes for the team, what was tested, known risk, rollback
+  path, and a simple **publish / do not publish** recommendation. Production
+  deployment requires Abraham's explicit approval.
+
+---
+
 ## Repo Structure
 
 ```

@@ -4,9 +4,13 @@ This fork (`TechPrieto/buzz`) mirrors `block/buzz` (upstream) plus everything
 upstream's own engineers pushed to their remotes over time — the `fork/`
 remote alone has 400+ branches (`duncan/*`, `eva/*`, `tho/*`, `kennylopez-*`,
 `wpfleger/*`, etc.). Those are **not ours**. This file tracks only the
-branches that carry changes we actually made or asked for, so a sync against
-upstream (`git log fork/main..origin/main`) never gets confused with noise
-that was never ours to begin with.
+branches that carry changes we actually made or asked for, so a comparison with
+upstream never gets confused with noise that was never ours to begin with.
+
+The mandatory operating rules are in [`AGENTS.md`](AGENTS.md); the plain-
+language owner guide is [`docs/TECHPRIETO_FORK_OPERATIONS.md`](docs/TECHPRIETO_FORK_OPERATIONS.md).
+Use the remote names consistently: `origin` means `TechPrieto/buzz` and
+`upstream` means `block/buzz`.
 
 When upstream ships a native equivalent of something listed here, drop our
 patch on the next sync and take theirs — fewer custom diffs to carry forward.
@@ -39,18 +43,36 @@ the only crates touched): 324 + 108 + 671 = 1103 tests passed, 0 failed.
 system `pkg-config` needed only by an unrelated `buzz-relay` dev-dependency
 (`mesh-llm` → `openssl-sys`) — not something these patches touch.
 
-## Sync procedure
+## Integration and release procedure
 
-Never `rebase` `fork/main` against `origin/main` — it rewrites history that
-client installs may already be anchored to. Instead, periodically:
+`origin/main` is TechPrieto's stable production reference. Never rebase,
+force-push, or directly edit it. Before an integration, create a rollback tag
+from the last validated production commit.
+
+Periodically —and immediately for a security fix— compare the selected upstream
+release or audited commit with our stable reference:
 
 ```sh
-git log fork/main..origin/main --oneline   # see what upstream shipped
+git fetch origin upstream --prune --tags
+git log origin/main..upstream/main --oneline   # see upstream changes to assess
+git log upstream/main..origin/main --oneline   # see our carried changes
 ```
 
-Cherry-pick or merge in only what's worth taking (security fixes: yes;
-unrelated features: no). Update this table when a patch lands, gets
-superseded by an upstream equivalent, or gets dropped.
+Do the work in an integration branch. Do not copy a moving upstream branch
+blindly, and do not cherry-pick an upstream feature until its dependencies and
+compatibility have been reviewed. Carry the final, tested state of our patches
+forward; do not preserve an old patch merely because it exists.
+
+Before production, run the relevant checks (`just ci` where supported; `just
+test` plus a staging migration check for relay/database/auth changes), perform a
+full-history secret scan, review GitHub security alerts, and verify rollback.
+Report to Abraham in plain Spanish: team-visible change, verification, known
+risk, rollback path, and a clear publish / do-not-publish recommendation.
+Deployment requires Abraham's explicit approval.
+
+Update this table when a patch lands, gets superseded by an upstream equivalent,
+or gets dropped. Each entry must retain enough context to identify its owner
+need, test evidence, upstream status, and rollback choice.
 
 **Verify "merged" claims by content, not just `git merge-base --is-ancestor`
 against the original branch name.** A patch can land via a different commit
