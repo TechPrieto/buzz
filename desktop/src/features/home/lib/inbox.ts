@@ -6,6 +6,7 @@ import {
   getThreadReference,
   isBroadcastReply,
 } from "@/features/messages/lib/threading";
+import { resolveThreadTitle } from "@/features/messages/lib/threadConversation";
 import {
   getProjectInboxReference,
   isProjectInboxItem,
@@ -53,6 +54,8 @@ export type InboxItem = {
   preview: string;
   senderLabel: string;
   subject: string;
+  /** Human-facing label derived from the immutable NIP-10 root event. */
+  threadTitle: string | null;
   timestampLabel: string;
   unreadCount: number;
 };
@@ -60,6 +63,7 @@ export type InboxItem = {
 export type InboxTypeLabel = {
   text: string;
   channelLabel: string | null;
+  threadTitle?: string;
 };
 
 export type InboxReply = {
@@ -327,6 +331,13 @@ export function getInboxTypeLabel(item: InboxItem): InboxTypeLabel {
   }
 
   if (isThreadActivityItem(item.item)) {
+    if (item.threadTitle) {
+      return {
+        text: "Thread",
+        channelLabel: null,
+        threadTitle: item.threadTitle,
+      };
+    }
     return {
       text: channelName ? "Thread in" : "Thread",
       channelLabel: channelName,
@@ -343,6 +354,9 @@ export function getInboxTypeLabel(item: InboxItem): InboxTypeLabel {
 
 export function formatInboxTypeLabel(item: InboxItem) {
   const label = getInboxTypeLabel(item);
+  if (label.threadTitle) {
+    return `${label.text}: ${label.threadTitle}`;
+  }
   return label.channelLabel
     ? `${label.text} #${label.channelLabel}`
     : label.text;
@@ -605,6 +619,10 @@ export function buildInboxItems({
           : undefined;
       const uniqueGroupItems = uniqueItemsById(group.items);
       const threadReplyItems = uniqueGroupItems.filter(isThreadReplyItem);
+      const threadTitle =
+        threadReplyItems.length > 0 && group.rootItem
+          ? resolveThreadTitle(group.rootItem.content, group.rootItem.tags)
+          : null;
       const threadReadAt =
         groupChannel.type !== "dm" &&
         threadReplyItems.length > 0 &&
@@ -667,6 +685,7 @@ export function buildInboxItems({
         preview,
         senderLabel,
         subject,
+        threadTitle,
         timestampLabel: formatInboxTimestamp(group.latestActivityAt),
         unreadCount: unreadItems.length,
       };

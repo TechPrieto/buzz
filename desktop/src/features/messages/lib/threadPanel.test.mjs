@@ -148,6 +148,49 @@ test("buildThreadPanelData connects direct comments to the thread head", () => {
   );
 });
 
+test("agent conversation threads render every descendant linearly", () => {
+  const root = message({ id: "root", createdAt: 1, body: "Plan agosto" });
+  const humanReply = message({
+    id: "human-reply",
+    createdAt: 2,
+    parentId: "root",
+    rootId: "root",
+    depth: 1,
+    tags: [["e", "root", "", "reply"]],
+  });
+  const agentReply = message({
+    id: "agent-reply",
+    createdAt: 3,
+    parentId: "human-reply",
+    rootId: "root",
+    depth: 2,
+    isAgent: true,
+    tags: [
+      ["e", "root", "", "root"],
+      ["e", "human-reply", "", "reply"],
+    ],
+  });
+
+  const panelData = buildThreadPanelData(
+    [root, humanReply, agentReply],
+    "root",
+    "root",
+    new Set(),
+  );
+
+  assert.deepEqual(
+    panelData.visibleReplies.map((entry) => ({
+      id: entry.message.id,
+      depth: entry.message.depth,
+      summary: entry.summary,
+    })),
+    [
+      { id: "human-reply", depth: 1, summary: null },
+      { id: "agent-reply", depth: 1, summary: null },
+    ],
+  );
+});
+
 test("buildThreadPanelData hides collapsed summaries for expanded replies", () => {
   const root = message({ id: "root", createdAt: 1 });
   const branch = message({

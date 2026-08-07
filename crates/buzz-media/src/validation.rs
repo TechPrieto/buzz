@@ -71,7 +71,8 @@ pub(crate) fn looks_like_mp4_iso_bmff(bytes: &[u8]) -> bool {
 ///
 /// HTML, JS, and SVG are the classic stored-XSS carriers. Native executables are
 /// blocked because there's no legitimate reason to host them inline in chat and
-/// they're a malware-distribution risk.
+/// they're a malware-distribution risk (share an executable as a zip instead —
+/// `application/zip` is not on this list).
 const BLOCKED_FILE_MIME_TYPES: &[&str] = &[
     // Active web content — stored-XSS vectors.
     "text/html",

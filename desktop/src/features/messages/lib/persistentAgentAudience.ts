@@ -33,9 +33,13 @@ function normalizePubkeys(pubkeys: Iterable<string>): string[] {
 function readEnabled(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    return window.localStorage.getItem(ENABLED_STORAGE_KEY) === "1";
+    const stored = window.localStorage.getItem(ENABLED_STORAGE_KEY);
+    // Thread-scoped agent continuity is the safe default: it only re-addresses
+    // agents the user already selected for this immutable root conversation.
+    // Preserve an explicit opt-out from existing installations.
+    return stored === null || stored === "1";
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -130,7 +134,9 @@ export function initializePersistentAgentAudience(
   pubkeys: Iterable<string>,
 ): void {
   if (!enabled || !scope || Object.hasOwn(audiences, scope)) return;
-  setPersistentAgentAudience(scope, pubkeys);
+  const normalized = normalizePubkeys(pubkeys);
+  if (normalized.length === 0) return;
+  setPersistentAgentAudience(scope, normalized);
 }
 
 export function setPersistentAgentAudience(

@@ -53,6 +53,7 @@ import { ComposerDockToolbar } from "./ComposerDockToolbar";
 import { ComposerUploadProgressPill } from "./ComposerUploadProgressPill";
 import { NonMemberMentionDialog } from "./NonMemberMentionDialog";
 import { useMentionSendFlow } from "./useMentionSendFlow";
+import { useNamedThreadComposer } from "./useNamedThreadComposer";
 import { usePersistentAgentMentionHydration } from "./usePersistentAgentMentionHydration";
 import { useComposerContentState } from "./useComposerContentState";
 import { useDraftPersistLifecycle } from "./useDraftPersistSnapshot";
@@ -60,6 +61,7 @@ import { submitMessageEdit } from "./submitMessageEdit";
 import { useComposerLinkPreviews } from "./useComposerLinkPreviews";
 import type { MessageComposerProps } from "./MessageComposer.types";
 function MessageComposerImpl({
+  allowNamedThread = false,
   audienceContext = null,
   channelId = null,
   channelName,
@@ -107,6 +109,10 @@ function MessageComposerImpl({
   } = useComposerLinkPreviews(deferredPreviewContent);
   const [isEmojiPickerOpen, setIsEmojiPickerOpen] = React.useState(false);
   const [isFormattingOpen, setIsFormattingOpen] = React.useState(false);
+  const namedThread = useNamedThreadComposer(
+    allowNamedThread && !replyTarget && !editTarget,
+    channelId,
+  );
   const [spoileredAttachmentUrls, setSpoileredAttachmentUrls] = React.useState<
     Set<string>
   >(() => new Set());
@@ -578,6 +584,7 @@ function MessageComposerImpl({
     persistentMentionHydration.beginSubmit();
     try {
       await mentionSendFlow.sendMessageWithMentionFlow({
+        additionalTags: namedThread.additionalTags,
         capturedChannelId: channelId,
         capturedThreadContext,
         pendingImeta: currentPendingImeta,
@@ -593,6 +600,7 @@ function MessageComposerImpl({
         audienceGeneration: persistentAudience.generation,
         audienceRevision: audienceScope ? persistentAudience.revision : null,
       });
+      namedThread.reset();
     } finally {
       persistentMentionHydration.endSubmit();
       onPreparingMentionSendChange?.(false);
@@ -624,6 +632,8 @@ function MessageComposerImpl({
     persistentMentionHydration,
     persistentAudience.generation,
     persistentAudience.revision,
+    namedThread.additionalTags,
+    namedThread.reset,
     isEditSubmissionLocked,
     effectiveDraftKey,
     mentions.getDraftMentionRefs,
@@ -949,7 +959,6 @@ function MessageComposerImpl({
                 </button>
               </div>
             ) : null}
-
             {composerLinkPreviews}
             {(media.pendingImeta.length > 0 ||
               media.queuedAttachments.length > 0 ||
@@ -973,7 +982,7 @@ function MessageComposerImpl({
                 />
               </div>
             )}
-
+            {namedThread.titleField}
             {/* biome-ignore lint/a11y/noStaticElementInteractions: keydown handler bridges Tiptap editor to autocomplete and submit */}
             <div
               className="rich-text-composer relative max-h-32 overflow-y-auto"
@@ -983,12 +992,11 @@ function MessageComposerImpl({
             >
               <EditorContent editor={richText.editor} />
             </div>
-
             <ComposerDockToolbar
               layoutMode={layoutMode}
               composerDisabled={composerDisabled}
               editor={richText.editor}
-              extraActions={toolbarExtraActions}
+              extraActions={[namedThread.toolbarAction, toolbarExtraActions]}
               formattingDisabled={composerDisabled}
               isEmojiPickerOpen={isEmojiPickerOpen}
               isFormattingOpen={isFormattingOpen}

@@ -705,6 +705,7 @@ export function useMentionSendFlow({
 
   const sendMessageWithMentionFlow = React.useCallback(
     async ({
+      additionalTags = [],
       capturedChannelId,
       capturedThreadContext = null,
       pendingImeta,
@@ -775,6 +776,7 @@ export function useMentionSendFlow({
         const outgoingTags = [
           ...buildCustomEmojiTags(trimmed, customEmoji),
           ...linkPreviewTags,
+          ...additionalTags,
         ];
         const nonMemberPubkeys = getNonMemberMentionPubkeys(pubkeys);
         let promptNonMemberPubkeys = nonMemberPubkeys.filter(

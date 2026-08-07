@@ -80,7 +80,23 @@ pub struct AgentModelCapabilities {
     pub available_models_raw: Option<serde_json::Value>,
 }
 
-/// Per-channel session IDs and turn counters.
+/// Stable key for a DM conversation rooted at a NIP-10 event.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConversationKey {
+    pub channel_id: Uuid,
+    pub root_event_id: String,
+}
+
+impl ConversationKey {
+    pub fn new(channel_id: Uuid, root_event_id: impl Into<String>) -> Self {
+        Self {
+            channel_id,
+            root_event_id: root_event_id.into(),
+        }
+    }
+}
+
+/// Per-channel and per-conversation session IDs and turn counters.
 ///
 /// Separated from `OwnedAgent` so the state machine is testable without
 /// spawning a real agent subprocess.
@@ -92,6 +108,10 @@ pub struct SessionState {
     /// Per-channel turn counters for proactive session rotation.
     /// Incremented on each successful prompt; reset when the session is rotated.
     pub turn_counts: HashMap<Uuid, u32>,
+    /// `(channel_id, root_event_id)` → session ID for thread-scoped DMs.
+    pub root_sessions: HashMap<ConversationKey, String>,
+    /// Per-root turn counters for thread-scoped DM sessions.
+    pub root_turn_counts: HashMap<ConversationKey, u32>,
     /// Turn counter for the heartbeat session.
     pub heartbeat_turn_count: u32,
     /// channel_id → rendered NIP-AE core prompt section, populated once at
@@ -124,15 +144,22 @@ impl SessionState {
     /// Returns `true` if the channel had an active session.
     pub fn invalidate_channel(&mut self, channel_id: &Uuid) -> bool {
         self.turn_counts.remove(channel_id);
+        self.root_turn_counts
+            .retain(|key, _| key.channel_id != *channel_id);
+        let root_session_count = self.root_sessions.len();
+        self.root_sessions
+            .retain(|key, _| key.channel_id != *channel_id);
         self.core_sections.remove(channel_id);
         self.canvas_sections.remove(channel_id);
-        self.sessions.remove(channel_id).is_some()
+        self.sessions.remove(channel_id).is_some() || self.root_sessions.len() != root_session_count
     }
 
     /// Invalidate all sessions and turn counters (e.g. after agent exit).
     pub fn invalidate_all(&mut self) {
         self.sessions.clear();
         self.turn_counts.clear();
+        self.root_sessions.clear();
+        self.root_turn_counts.clear();
         self.heartbeat_session = None;
         self.heartbeat_turn_count = 0;
         self.core_sections.clear();
@@ -143,6 +170,14 @@ impl SessionState {
     fn has_channel_state(&self, channel_id: &Uuid) -> bool {
         self.sessions.contains_key(channel_id)
             || self.turn_counts.contains_key(channel_id)
+            || self
+                .root_sessions
+                .keys()
+                .any(|key| key.channel_id == *channel_id)
+            || self
+                .root_turn_counts
+                .keys()
+                .any(|key| key.channel_id == *channel_id)
             || self.core_sections.contains_key(channel_id)
             || self.canvas_sections.contains_key(channel_id)
     }
@@ -543,6 +578,8 @@ pub struct PromptContext {
     pub context_message_limit: u32,
     /// Max turns per session before proactive rotation. 0 = disabled.
     pub max_turns_per_session: u32,
+    /// Scope ACP sessions by `(channel_id, root_event_id)`.
+    pub thread_scoped_sessions: bool,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
     /// Agent identity — used to derive the NIP-AE conversation key at
@@ -1396,6 +1433,19 @@ pub async fn run_prompt_task(
     control_rx: Option<tokio::sync::oneshot::Receiver<ControlSignal>>,
     turn_id: String,
 ) {
+    let root_session_key = if ctx.thread_scoped_sessions {
+        batch.as_ref().and_then(|batch| {
+            batch.events.last().map(|event| {
+                ConversationKey::new(
+                    batch.channel_id,
+                    crate::queue::effective_root_id(&event.event),
+                )
+            })
+        })
+    } else {
+        None
+    };
+
     // Is this a channel prompt or a heartbeat?
     let source = match &batch {
         Some(b) => PromptSource::Channel(b.channel_id),
@@ -1504,7 +1554,10 @@ pub async fn run_prompt_task(
         if let (PromptSource::Channel(cid), Some(owner_pk)) =
             (&source, ctx.agent_owner_pubkey.as_ref())
         {
-            let is_new_channel_session = !agent.state.sessions.contains_key(cid);
+            let is_new_channel_session = root_session_key.as_ref().map_or_else(
+                || !agent.state.sessions.contains_key(cid),
+                |key| !agent.state.root_sessions.contains_key(key),
+            );
             if is_new_channel_session && !agent.state.core_sections.contains_key(cid) {
                 // Bounded — we'd rather start the session with no core hint
                 // than block session creation on a stalled relay.
@@ -1557,7 +1610,10 @@ pub async fn run_prompt_task(
     let mut title_channel: Option<String> = None;
     let mut origin_channel_type: Option<String> = None;
     if let PromptSource::Channel(cid) = &source {
-        let is_new_channel_session = !agent.state.sessions.contains_key(cid);
+        let is_new_channel_session = root_session_key.as_ref().map_or_else(
+            || !agent.state.sessions.contains_key(cid),
+            |key| !agent.state.root_sessions.contains_key(key),
+        );
         let needs_canvas = is_new_channel_session && !agent.state.canvas_sections.contains_key(cid);
         if is_new_channel_session {
             let (is_dm, resolved_channel, resolved_channel_type) =
@@ -1595,7 +1651,16 @@ pub async fn run_prompt_task(
 
     let (session_id, is_new_session) = match &source {
         PromptSource::Channel(cid) => {
-            if let Some(sid) = agent.state.sessions.get(cid) {
+            let existing_session = root_session_key
+                .as_ref()
+                .and_then(|key| agent.state.root_sessions.get(key))
+                .or_else(|| {
+                    root_session_key
+                        .is_none()
+                        .then(|| agent.state.sessions.get(cid))
+                        .flatten()
+                });
+            if let Some(sid) = existing_session {
                 (sid.clone(), false)
             } else {
                 // The title is channel-qualified (`Agent · #channel`) so one
@@ -1618,7 +1683,11 @@ pub async fn run_prompt_task(
                             target: "pool::session",
                             "created session {sid} for channel {cid}"
                         );
-                        agent.state.sessions.insert(*cid, sid.clone());
+                        if let Some(key) = root_session_key.clone() {
+                            agent.state.root_sessions.insert(key, sid.clone());
+                        } else {
+                            agent.state.sessions.insert(*cid, sid.clone());
+                        }
                         // Commit canvas only after session creation succeeds (I3).
                         if let Some((pending_cid, section)) = pending_canvas.take() {
                             agent.state.canvas_sections.insert(pending_cid, section);
@@ -1911,6 +1980,7 @@ pub async fn run_prompt_task(
                 channel_info: channel_info.as_ref(),
                 conversation_context: conversation_context.as_ref(),
                 profile_lookup: profile_lookup.as_ref(),
+                stable_dm_root_reply: ctx.thread_scoped_sessions,
                 has_system_prompt_support: agent.has_system_prompt_support(),
                 base_prompt: ctx.base_prompt,
                 system_prompt: ctx.system_prompt.as_deref(),
@@ -2149,7 +2219,11 @@ pub async fn run_prompt_task(
                 if limit > 0 {
                     match &source {
                         PromptSource::Channel(cid) => {
-                            let count = agent.state.turn_counts.entry(*cid).or_insert(0);
+                            let count = if let Some(key) = root_session_key.clone() {
+                                agent.state.root_turn_counts.entry(key).or_insert(0)
+                            } else {
+                                agent.state.turn_counts.entry(*cid).or_insert(0)
+                            };
                             *count += 1;
                             *count >= limit
                         }
@@ -2168,7 +2242,12 @@ pub async fn run_prompt_task(
                     target: "pool::session",
                     "rotating session for {source:?} after {stop_reason:?}",
                 );
-                agent.state.invalidate(&source);
+                if let Some(key) = root_session_key.as_ref() {
+                    agent.state.root_sessions.remove(key);
+                    agent.state.root_turn_counts.remove(key);
+                } else {
+                    agent.state.invalidate(&source);
+                }
             }
 
             let core_stop = acp_stop_to_core(&stop_reason);
@@ -5280,6 +5359,34 @@ mod tests {
     }
 
     #[test]
+    fn test_root_scoped_sessions_are_isolated_and_reused_per_channel_root() {
+        let channel_id = Uuid::new_v4();
+        let root_a = ConversationKey::new(channel_id, "root-a");
+        let root_b = ConversationKey::new(channel_id, "root-b");
+        let mut state = SessionState::default();
+
+        state
+            .root_sessions
+            .insert(root_a.clone(), "session-a".into());
+        state
+            .root_sessions
+            .insert(root_b.clone(), "session-b".into());
+
+        assert_eq!(
+            state.root_sessions.get(&root_a).map(String::as_str),
+            Some("session-a")
+        );
+        assert_eq!(
+            state.root_sessions.get(&root_b).map(String::as_str),
+            Some("session-b")
+        );
+
+        state.invalidate_channel(&channel_id);
+        assert!(!state.root_sessions.contains_key(&root_a));
+        assert!(!state.root_sessions.contains_key(&root_b));
+    }
+
+    #[test]
     fn test_rotate_after_natural_completion_invalidates_channel_state() {
         let (mut s, ch_a, ch_b) = make_state();
 
@@ -6536,6 +6643,7 @@ mod tests {
             ),
             context_message_limit: 0,
             max_turns_per_session: 0,
+            thread_scoped_sessions: false,
             permission_mode: PermissionMode::Default,
             agent_keys: agent_keys.clone(),
             agent_owner_pubkey: owner_pubkey,

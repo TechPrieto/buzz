@@ -10,6 +10,29 @@ typedef ComposeBarOnSend =
       List<List<String>> mediaTags,
     });
 
+List<String> messageNotificationPubkeys({
+  required Iterable<String> explicitMentions,
+  required Iterable<ChannelMember> channelMembers,
+  required String? currentPubkey,
+  required bool isDirectMessage,
+}) {
+  final current = currentPubkey?.toLowerCase();
+  final seen = <String>{};
+  final recipients = <String>[];
+
+  void add(String pubkey) {
+    final normalized = pubkey.toLowerCase();
+    if (normalized == current || !seen.add(normalized)) return;
+    recipients.add(pubkey);
+  }
+
+  explicitMentions.forEach(add);
+  if (isDirectMessage) {
+    channelMembers.map((member) => member.pubkey).forEach(add);
+  }
+  return recipients;
+}
+
 class ComposeBar extends HookConsumerWidget {
   final String channelId;
   final String channelName;
@@ -417,6 +440,15 @@ class ComposeBar extends HookConsumerWidget {
           if (hasMention(text, entry.key)) entry.value,
       ];
       final outgoing = _OutgoingMentions(selectedMentions);
+      final directMessageMembers = isDmChannel
+          ? await ref.read(channelMembersProvider(channelId).future)
+          : const <ChannelMember>[];
+      List<String> notificationPubkeys() => messageNotificationPubkeys(
+        explicitMentions: outgoing.pubkeys,
+        channelMembers: directMessageMembers,
+        currentPubkey: currentPubkey,
+        isDirectMessage: isDmChannel,
+      );
       final scan = await _scanNonMemberMentions(
         ref,
         channelId: channelId,
@@ -461,7 +493,7 @@ class ComposeBar extends HookConsumerWidget {
             );
             await onSend(
               payload.content,
-              outgoing.pubkeys,
+              notificationPubkeys(),
               mediaTags: [...payload.mediaTags, ...outgoing.referenceTags],
             );
             if (context.mounted) clearComposer();
@@ -526,7 +558,7 @@ class ComposeBar extends HookConsumerWidget {
             if (queueGeneration != uploadGeneration.value) return;
             await delivery(
               payload.content,
-              outgoing.pubkeys,
+              notificationPubkeys(),
               mediaTags: [...payload.mediaTags, ...outgoing.referenceTags],
             );
           } catch (error) {

@@ -383,6 +383,41 @@ function buildVisibleThreadReplies(params: {
   return entries;
 }
 
+function isAgentConversationThread(
+  index: ThreadPanelIndex,
+  rootId: string,
+): boolean {
+  const root = index.messageById.get(rootId);
+  if (
+    root?.tags?.some((tag) => tag[0] === "subject" && Boolean(tag[1]?.trim()))
+  ) {
+    return true;
+  }
+
+  return [...index.messageById.values()].some(
+    (message) =>
+      message.isAgent === true &&
+      (message.id === rootId || message.rootId === rootId),
+  );
+}
+
+function buildLinearConversationReplies(
+  index: ThreadPanelIndex,
+  rootId: string,
+): MainTimelineEntry[] {
+  return [...index.messageById.values()]
+    .filter((message) => message.id !== rootId && message.rootId === rootId)
+    .sort((left, right) =>
+      left.createdAt !== right.createdAt
+        ? left.createdAt - right.createdAt
+        : left.id.localeCompare(right.id),
+    )
+    .map((message) => ({
+      message: normalizeInlineReplyMessage(message, 1),
+      summary: null,
+    }));
+}
+
 function buildRelayThreadSummary(
   messageId: string,
   summary: ChannelWindowThreadSummary,
@@ -508,12 +543,14 @@ export function buildThreadPanelDataFromIndex(
   }
 
   const normalizedThreadHead = normalizeHeadMessage(threadHead);
-  const visibleReplies = buildVisibleThreadReplies({
-    openThreadHeadId,
-    directChildrenByParentId,
-    descendantStatsByMessageId,
-    expandedReplyIds,
-  });
+  const visibleReplies = isAgentConversationThread(index, openThreadHeadId)
+    ? buildLinearConversationReplies(index, openThreadHeadId)
+    : buildVisibleThreadReplies({
+        openThreadHeadId,
+        directChildrenByParentId,
+        descendantStatsByMessageId,
+        expandedReplyIds,
+      });
 
   const replyTargetInBranch =
     threadReplyTargetId === threadHead.id
