@@ -39,6 +39,42 @@ the only crates touched): 324 + 108 + 671 = 1103 tests passed, 0 failed.
 system `pkg-config` needed only by an unrelated `buzz-relay` dev-dependency
 (`mesh-llm` → `openssl-sys`) — not something these patches touch.
 
+## 2026-08-08: upstream sync to `desktop-v0.5.7`
+
+Merged `desktop-v0.5.7` (147 upstream commits) into `main` via `git merge
+--ff-only` from `integration/desktop-v0.5.7-techprieto` (no rebase, per the
+rule above). Commit: `6bbc31452`. Rollback point: tag
+`techprieto-baseline-2026-08-07` (the pre-merge tip).
+
+Validation before push:
+- `detect-secrets` scoped to the ~1077 files this merge actually touches
+  (not upstream's full history, which isn't ours to audit): 205 hits, all
+  manually confirmed false positives (test fixtures, a dev-default DB
+  connection string already marked `sadscan:disable` in the code itself,
+  public Node.js binary checksums). Zero real secrets.
+- Isolated Docker Compose smoke test (own network/volumes/DB, random
+  secrets, zero contact with `buzz-prod`): relay built from `6bbc31452`,
+  full round trip verified — channel create, message send/read, media
+  upload with sanitization. All passed. Stack fully torn down after.
+- `cargo test --workspace --exclude buzz-relay` (broader than the previous
+  3-crate scope; `buzz-relay`'s own test suite is still blocked by the same
+  pre-existing missing `pkg-config`, its normal `--release` build was
+  verified separately and succeeds). Two failure patterns found, both
+  independently confirmed **not caused by this merge**:
+  - `crates/buzz-agent/tests/fake_llm.rs` (turn-cancellation tests): flaky
+    across repeated runs — different test names fail each run, one run passed
+    clean. Reproduced the same failure on `techprieto-baseline-2026-08-07`
+    (our tip *before* this merge existed) — pre-existing in our fork already.
+  - `crates/git-sign-nostr/src/lib.rs::test_parse_envelope_rejects_invalid_oa_pubkey`:
+    fails deterministically (3/3 runs), but reproduced identically on pure
+    `desktop-v0.5.7` with none of our patches applied — an upstream bug, not
+    ours to carry blame for, not introduced by this sync.
+
+Pushed to `origin/main` (`TechPrieto/buzz`, public) after all of the above.
+Not deployed to the VPS relay — that is a separate decision; see the
+"Política de instalaciones a cliente" and rollback pattern in
+`techprieto-workspace/operations/BUZZ-MESSAGING.md`.
+
 ## Sync procedure
 
 Never `rebase` `fork/main` against `origin/main` — it rewrites history that
