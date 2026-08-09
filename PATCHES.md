@@ -75,6 +75,53 @@ Not deployed to the VPS relay — that is a separate decision; see the
 "Política de instalaciones a cliente" and rollback pattern in
 `techprieto-workspace/operations/BUZZ-MESSAGING.md`.
 
+## 2026-08-09: upstream sync to `desktop-v0.5.8` / `relay-v0.2.1`
+
+Merged `origin/main` (11 upstream commits since `desktop-v0.5.7`) directly
+into `fork/main` in an isolated worktree (`/tmp/sync-0.5.8`), no rebase, per
+the rule above. Commit: `65b93f1d3`. Rollback point: tag
+`techprieto-baseline-2026-08-09` (the pre-merge tip, `85ecb43bb`).
+
+Conflicts were all version-bump noise (`.release/desktop-candidate.json`,
+`CHANGELOG.md`, `desktop/package.json`, `desktop/src-tauri/Cargo.{toml,lock}`,
+`desktop/src-tauri/tauri.conf.json`) — resolved by taking upstream's 0.5.8
+version strings and merging both CHANGELOG entries (0.5.8 above 0.5.7, not
+replacing it).
+
+**Notable upstream change: `Revert "fix(acp): reject unattended permission
+requests"` (`#5323`, reverts `#4609`).** Changes `buzz-acp`'s *default*
+`permission_mode` from `dontAsk` (fail-closed: unattended
+`session/request_permission` calls are rejected) to `bypassPermissions`
+(auto-approved). Discussed with the owner in #buzz-ops (2026-08-08/09) —
+decision: **take the code as-is (do not patch it) but override the default
+back to `dontAsk` on the VPS via `BUZZ_ACP_PERMISSION_MODE=dontAsk` in the
+deploy `.env`.** Reasoning: keeps this sync free of a custom code diff to
+carry forward (upstream's default is the one in the table above them,
+`bypassPermissions`, so future syncs won't conflict on this file), while
+preserving fail-closed behavior in prod until we've actually observed
+whether auto-approve solves a real problem for us. Toggling later is a
+one-line `.env` change + service restart, not a rebuild.
+
+Validation before push:
+- `cargo test --workspace --exclude buzz-relay --no-fail-fast`: same two
+  failure patterns as the 0.5.7 sync, both re-confirmed **not caused by this
+  merge**:
+  - `crates/buzz-agent/tests/fake_llm.rs` (turn-cancellation tests): flaky —
+    different test names fail across repeated runs (5 runs on the merge tip,
+    3 more on `techprieto-baseline-2026-08-09` pre-merge), one clean run in
+    each set. Reproduces identically before and after this merge.
+  - `crates/git-sign-nostr/src/lib.rs::test_parse_envelope_rejects_invalid_oa_pubkey`:
+    fails deterministically — same pre-existing upstream bug documented in
+    the 0.5.7 sync entry above, untouched by this merge.
+- `cargo build --release -p buzz-relay`: compiles clean (8m25s), confirming
+  the crate builds even though its own test suite is still blocked locally
+  by the pre-existing missing `pkg-config`.
+
+Pushed to `origin/main` (`TechPrieto/buzz`, public) after all of the above.
+Not deployed to the VPS relay yet, and the `BUZZ_ACP_PERMISSION_MODE`
+override has not been applied to the VPS `.env` yet either — both are
+separate steps pending the owner's go-ahead.
+
 ## Sync procedure
 
 Never `rebase` `fork/main` against `origin/main` — it rewrites history that
