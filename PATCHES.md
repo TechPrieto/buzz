@@ -122,6 +122,64 @@ Not deployed to the VPS relay yet, and the `BUZZ_ACP_PERMISSION_MODE`
 override has not been applied to the VPS `.env` yet either — both are
 separate steps pending the owner's go-ahead.
 
+## 2026-08-10: upstream sync to `desktop-v0.5.9`
+
+Merged `origin/main` (25 upstream commits since `desktop-v0.5.8`) directly
+into `fork/main` in an isolated worktree (`/tmp/sync-0.5.9`), no rebase, per
+the rule above. Commit: `146f6261a`. Rollback point: tag
+`techprieto-baseline-2026-08-10` (the pre-merge tip, `f5b15af9c`).
+
+**Real conflicts this time, not just version-bump noise** — the largest
+upstream change in this batch was `563e4346d` ("Reduce repeated ACP session
+context", #5423), which touches the same `SessionState`/session-creation
+code path as our own `fix/codex-dm-root-sessions` patch:
+
+- `crates/buzz-acp/src/pool.rs`: both sides added a struct in the same spot
+  (our `ConversationKey` for thread-scoped DM sessions, their
+  `ChannelDeliveryState` for standing-context delivery tracking) — kept
+  both, combined the `invalidate_channel` cleanup to clear both
+  `root_sessions` and `deliveries`, and combined session-creation to both
+  route into `root_sessions`/`sessions` per our thread-scoping logic *and*
+  seed `deliveries` + call `notify_session_spawned` per theirs (verified
+  `deliveries` is keyed by plain `channel_id`, independent of our
+  thread-scoping, so both belong together unconditionally).
+- `crates/buzz-acp/src/queue.rs`: three of our test functions and two of
+  upstream's landed at the same anchor point in the test module, producing
+  an interleaved conflict. Reconstructed both original test bodies in full
+  from each side's pre-merge blob (`git show HEAD:...` / `git show
+  origin/main:...`) rather than trying to hand-edit the tangled diff, then
+  verified `FormatPromptArgs` already carries both sides' fields
+  (`stable_dm_root_reply` ours, `conversation_context_had_delivered_events`
+  theirs) with no further conflict.
+- `desktop/src/features/messages/lib/persistentAgentAudience.ts`: took
+  upstream's version outright — our side was leftover WIP from the
+  `feat/named-conversation-threads` snapshot commits, not a maintained
+  patch, and upstream's rewrite is the more current, intentional behavior.
+
+`cargo check -p buzz-acp` confirmed the manual resolution compiles before
+committing.
+
+Also reviewed the new `feat(desktop): NIP-AM agent-usage backend` commit
+(`5e4c05f90`, ~2000 lines in `usage.rs`) for security surface before
+merging: no new outbound HTTP calls — it's local aggregation that publishes
+NIP events through our own relay for usage/cost tracking, no new network
+exposure. `config.rs` (the file the `permission_mode` revert touched last
+sync) has zero changes in this batch — reviewed line by line, confirmed.
+
+Validation before push:
+- `cargo test --workspace --exclude buzz-relay --no-fail-fast`: only the
+  same pre-existing `git-sign-nostr` failure documented in the 0.5.7 sync
+  entry — the `buzz-agent` turn-cancellation flakiness didn't even show up
+  in the main run this time, but 3 repeated `-p buzz-agent --test fake_llm`
+  runs on both the merge tip and the `techprieto-baseline-2026-08-10`
+  pre-merge tip reproduced it identically on both (different test names
+  failing each run) — confirmed still preexisting, not from this merge.
+- `cargo build --release -p buzz-relay`: compiles clean (8m24s).
+
+Pushed to `origin/main` (`TechPrieto/buzz`, public) after all of the above.
+Not deployed to the VPS relay yet — separate step pending the owner's
+go-ahead.
+
 ## Sync procedure
 
 Never `rebase` `fork/main` against `origin/main` — it rewrites history that
