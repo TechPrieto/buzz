@@ -79,7 +79,6 @@ const ALLOWED_MIMES: &[&str] = &[
 /// relay will refuse.
 const BLOCKED_MIMES: &[&str] = &[
     // Active web content — stored-XSS vectors.
-    "text/html",
     "application/xhtml+xml",
     "image/svg+xml",
     "application/javascript",
