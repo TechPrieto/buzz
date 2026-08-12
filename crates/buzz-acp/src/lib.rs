@@ -4,6 +4,7 @@ mod acp;
 mod config;
 mod engram_fetch;
 mod filter;
+mod native_reply;
 mod observer;
 mod pool;
 mod pool_lifecycle;
@@ -1811,6 +1812,30 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
+    let native_reply_publisher = if config.native_replies {
+        let publisher = Arc::new(native_reply::NativeReplyPublisher::new(
+            relay.rest_client(),
+            config.native_reply_outbox.clone(),
+        ));
+        match publisher.drain().await {
+            Ok(report) => tracing::info!(
+                target: "native_reply::startup",
+                accepted = report.accepted,
+                remaining = report.remaining,
+                outbox = %config.native_reply_outbox.display(),
+                "native reply startup outbox drain completed"
+            ),
+            Err(error) => tracing::warn!(
+                target: "native_reply::startup",
+                outbox = %config.native_reply_outbox.display(),
+                "native reply startup outbox drain failed: {error}"
+            ),
+        }
+        Some(publisher)
+    } else {
+        None
+    };
+
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -1839,6 +1864,7 @@ async fn tokio_main() -> Result<()> {
         context_message_limit: config.context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
         thread_scoped_sessions: config.thread_scoped_sessions,
+        native_reply_publisher,
         permission_mode: config.permission_mode,
         agent_keys: config.keys.clone(),
         agent_owner_pubkey: startup_owner
@@ -6243,6 +6269,8 @@ mod build_mcp_servers_tests {
             context_message_limit: 12,
             max_turns_per_session: 0,
             thread_scoped_sessions: false,
+            native_replies: false,
+            native_reply_outbox: std::path::PathBuf::from("/tmp/native-replies.ndjson"),
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: false,
@@ -6466,6 +6494,8 @@ mod error_outcome_emission_tests {
             context_message_limit: 12,
             max_turns_per_session: 0,
             thread_scoped_sessions: false,
+            native_replies: false,
+            native_reply_outbox: std::path::PathBuf::from("/tmp/native-replies.ndjson"),
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: false,

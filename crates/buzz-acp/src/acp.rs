@@ -211,6 +211,9 @@ pub struct AcpClient {
     /// deltas. Both goose and buzz-agent emit this notification; goose gates
     /// on client capability advertisement, buzz-agent emits unconditionally.
     goose_usage: UsageTracker,
+    /// Text emitted as ACP `agent_message_chunk` updates during the current
+    /// prompt turn. Thought, plan, and tool updates never enter this buffer.
+    final_response: String,
 }
 
 /// Recursively merge `overlay` into `base`, with `overlay` winning on scalar/shape
@@ -550,7 +553,20 @@ impl AcpClient {
             steering_supported: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
+            final_response: String::new(),
         })
+    }
+
+    /// Take the accumulated ordinary agent response for the current prompt.
+    ///
+    /// The returned text contains only `agent_message_chunk` content. Taking
+    /// it clears the buffer so it cannot be published twice.
+    pub fn take_final_response(&mut self) -> String {
+        std::mem::take(&mut self.final_response)
+    }
+
+    fn begin_prompt_turn(&mut self) {
+        self.final_response.clear();
     }
 
     /// Attach a local observer feed to this ACP client.
@@ -768,6 +784,7 @@ impl AcpClient {
         idle_timeout: std::time::Duration,
         max_duration: std::time::Duration,
     ) -> Result<StopReason, AcpError> {
+        self.begin_prompt_turn();
         let params = build_prompt_params(session_id, prompt_blocks);
         let hard_deadline = tokio::time::Instant::now() + max_duration;
         self.current_hard_deadline = Some(hard_deadline);
@@ -1745,6 +1762,7 @@ impl AcpClient {
         match update_type {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
+                    self.final_response.push_str(text);
                     tracing::info!(target: "acp::stream", "{text}");
                 }
                 false
@@ -3566,6 +3584,57 @@ mod tests {
         AcpClient::spawn("cat", &[], &[], false)
             .await
             .expect("spawn cat as inert client")
+    }
+
+    fn message_chunk_msg(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "test-session",
+                "update": {
+                    "sessionUpdate": "agent_message_chunk",
+                    "content": { "text": text },
+                },
+            }
+        })
+    }
+
+    fn thought_chunk_msg(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "session/update",
+            "params": {
+                "sessionId": "test-session",
+                "update": {
+                    "sessionUpdate": "agent_thought_chunk",
+                    "content": { "text": text },
+                },
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn final_response_accumulates_message_chunks_and_take_drains_it() {
+        let mut client = spawn_inert_client().await;
+
+        let _ = client.handle_session_update(&message_chunk_msg("Hello"));
+        let _ = client.handle_session_update(&message_chunk_msg(", world"));
+
+        assert_eq!(client.take_final_response(), "Hello, world");
+        assert_eq!(client.take_final_response(), "");
+    }
+
+    #[tokio::test]
+    async fn prompt_turn_resets_final_response_and_excludes_thought_chunks() {
+        let mut client = spawn_inert_client().await;
+        let _ = client.handle_session_update(&message_chunk_msg("stale"));
+
+        client.begin_prompt_turn();
+        let _ = client.handle_session_update(&thought_chunk_msg("private reasoning"));
+        let _ = client.handle_session_update(&message_chunk_msg("fresh"));
+
+        assert_eq!(client.take_final_response(), "fresh");
     }
 
     /// Build a `session/update` JSON-RPC notification carrying a

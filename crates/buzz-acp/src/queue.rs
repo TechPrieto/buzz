@@ -1233,6 +1233,12 @@ fn append_new_thread_reply_instruction(s: &mut String, event_id: &str) {
     ));
 }
 
+fn append_native_reply_instruction(s: &mut String) {
+    s.push_str(
+        "\nIMPORTANT: Native reply delivery is enabled. Your ordinary final response is automatically published to the correct flat Buzz thread, so you must NOT call `buzz messages send` for that ordinary final response. The Buzz CLI remains available for additional explicitly requested messages or delegations.",
+    );
+}
+
 /// Decide whether a turn is human-facing for reply-anchor purposes.
 ///
 /// A turn is human-facing when the triggering sender is a human, OR a human
@@ -1334,15 +1340,23 @@ fn append_channel_description(s: &mut String, channel_info: Option<&PromptChanne
 /// replies; in the channel branch a `Some` anchor means a human-facing
 /// top-level mention whose reply should open a new thread rooted at the
 /// triggering event.
+#[derive(Clone, Copy)]
+struct ConversationContextState {
+    included: bool,
+    previously_delivered: bool,
+}
+
 fn format_context_hints(
     channel_id: Uuid,
     channel_info: Option<&PromptChannelInfo>,
     thread_tags: &ThreadTags,
     is_dm: bool,
-    has_conversation_context: bool,
-    conversation_context_had_delivered_events: bool,
+    conversation_context: ConversationContextState,
     reply_anchor: Option<&str>,
+    native_replies: bool,
 ) -> String {
+    let has_conversation_context = conversation_context.included;
+    let conversation_context_had_delivered_events = conversation_context.previously_delivered;
     let channel_display = match channel_info {
         Some(ci) => format!("{} (#{channel_id})", ci.name),
         None => channel_id.to_string(),
@@ -1350,7 +1364,7 @@ fn format_context_hints(
 
     // DM check comes first — a DM reply has both thread tags AND is_dm=true,
     // and the scope should be "dm" (not "thread") because the agent is in a DM.
-    if is_dm {
+    let mut context = if is_dm {
         let is_reply = thread_tags.root_event_id.is_some();
         // DM replies use thread command because /messages excludes thread replies.
         // DM non-replies use get for recent conversation.
@@ -1381,11 +1395,15 @@ fn format_context_hints(
                     s.push_str(&format!("\nParent: {parent}"));
                 }
             }
-            if let Some(event_id) = reply_anchor {
-                append_reply_instruction(&mut s, event_id);
+            if !native_replies {
+                if let Some(event_id) = reply_anchor {
+                    append_reply_instruction(&mut s, event_id);
+                }
             }
-        } else if let Some(event_id) = reply_anchor {
-            append_new_thread_reply_instruction(&mut s, event_id);
+        } else if !native_replies {
+            if let Some(event_id) = reply_anchor {
+                append_new_thread_reply_instruction(&mut s, event_id);
+            }
         }
         s
     } else if let Some(ref root) = thread_tags.root_event_id {
@@ -1409,8 +1427,10 @@ fn format_context_hints(
             }
         }
         s.push_str(&format!("\n{ctx_hint}"));
-        if let Some(event_id) = reply_anchor {
-            append_reply_instruction(&mut s, event_id);
+        if !native_replies {
+            if let Some(event_id) = reply_anchor {
+                append_reply_instruction(&mut s, event_id);
+            }
         }
         s
     } else {
@@ -1423,11 +1443,17 @@ fn format_context_hints(
         s.push_str(
             "\nHint: Use `buzz messages get --channel <UUID>` for recent messages if needed.",
         );
-        if let Some(event_id) = reply_anchor {
-            append_new_thread_reply_instruction(&mut s, event_id);
+        if !native_replies {
+            if let Some(event_id) = reply_anchor {
+                append_new_thread_reply_instruction(&mut s, event_id);
+            }
         }
         s
+    };
+    if native_replies {
+        append_native_reply_instruction(&mut context);
     }
+    context
 }
 
 /// Format a conversation context section (thread or DM).
@@ -1477,6 +1503,8 @@ pub struct FormatPromptArgs<'a> {
     pub profile_lookup: Option<&'a PromptProfileLookup>,
     /// Anchor DM responses to the stable NIP-10 root. Opt-in for staged rollout.
     pub stable_dm_root_reply: bool,
+    /// Native harness delivery replaces the manual ordinary-send instruction.
+    pub native_replies: bool,
     /// When true, base_prompt and system_prompt are delivered via the system
     /// role (session/new) and omitted from the user message. When false
     /// (legacy agents), they are injected as `[Base]` and `[System]` sections.
@@ -1650,9 +1678,12 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
         args.channel_info,
         &thread_tags,
         is_dm,
-        args.conversation_context.is_some(),
-        args.conversation_context_had_delivered_events,
+        ConversationContextState {
+            included: args.conversation_context.is_some(),
+            previously_delivered: args.conversation_context_had_delivered_events,
+        },
         reply_anchor.as_deref(),
+        args.native_replies,
     ));
 
     // 3. Conversation context (thread or DM).
@@ -4438,6 +4469,36 @@ mod tests {
             prompt.contains("new top-level message"),
             "top-level human message should use the new-thread instruction"
         );
+    }
+
+    #[test]
+    fn native_reply_instruction_replaces_manual_ordinary_send_rule() {
+        let ch = Uuid::new_v4();
+        let event = make_event("hello native agent");
+        let batch = FlushBatch {
+            channel_id: ch,
+            events: vec![BatchEvent {
+                event,
+                prompt_tag: "test".into(),
+                received_at: Instant::now(),
+            }],
+            cancelled_events: vec![],
+            cancel_reason: None,
+        };
+
+        let prompt = format_prompt(
+            &batch,
+            &FormatPromptArgs {
+                native_replies: true,
+                ..Default::default()
+            },
+        )
+        .join("\n\n");
+
+        assert!(prompt.contains("ordinary final response is automatically published"));
+        assert!(prompt.contains("must NOT call `buzz messages send`"));
+        assert!(prompt.contains("additional explicitly requested messages or delegations"));
+        assert!(!prompt.contains("use `--reply-to"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # buzz-acp
 
-ACP harness that connects AI agents to Buzz. The harness listens for @mentions on the relay, prompts your agent, and the agent replies using the Buzz CLI.
+ACP harness that connects AI agents to Buzz. The harness listens for @mentions on the relay and prompts your agent. By default the agent replies using the Buzz CLI; optional native-reply mode publishes the ACP final response directly.
 
 ```
 Buzz Relay ──WS──→ buzz-acp ──stdio──→ Your Agent
@@ -113,6 +113,8 @@ All configuration is via environment variables (or CLI flags — every env var h
 | `BUZZ_ACP_MCP_COMMAND` | no | `""` (empty) | Path to an optional MCP server binary to provide to the agent subprocess. |
 | `BUZZ_ACP_IDLE_TIMEOUT` | no | `620` | Idle timeout: max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
 | `BUZZ_ACP_MAX_TURN_DURATION` | no | `7200` | Absolute wall-clock cap per turn (safety valve). |
+| `BUZZ_ACP_NATIVE_REPLIES` | no | `false` | Auto-publish nonblank final text from successful channel turns. Heartbeats, cancelled turns, and errors never post. |
+| `BUZZ_ACP_NATIVE_REPLY_OUTBOX` | no | `$XDG_STATE_HOME/buzz/acp-native-replies-<agent-pubkey>.ndjson` or `$HOME/.local/state/buzz/acp-native-replies-<agent-pubkey>.ndjson` | Durable signed-event outbox used until the relay returns `accepted: true` (or an exact-ID query proves delivery). |
 | `BUZZ_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
 
 **Note:** `BUZZ_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
@@ -254,7 +256,7 @@ Forum event kinds:
 2. **Channel discovery** — Queries the relay REST API for accessible channels, subscribes to each.
 3. **Event loop** — Listens for @mention events (kind 9 with the agent's pubkey in a `#p` tag). Events queue per channel.
 4. **Prompting** — When events are pending and no prompt is in flight for that channel, drains all queued events for the oldest channel into a single batched prompt via ACP `session/prompt`.
-5. **Agent response** — The agent processes the prompt and uses the Buzz CLI (`send_message`, `get_messages`, etc.) to interact with Buzz.
+5. **Agent response** — In default manual mode, the agent uses the Buzz CLI to send its reply. With `--native-replies`, the harness signs the final ACP message as a flat kind-9 reply, verifies exact-ID non-duplication, requires `accepted: true`, and durably queues the exact signed event if delivery remains unsuccessful.
 6. **Recovery** — If the agent crashes, the harness respawns it. If the relay disconnects, the harness reconnects with a `since` filter to avoid missing events.
 
 Each channel has at most one prompt in flight. Multiple channels can be processed concurrently when agents > 1.

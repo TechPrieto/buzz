@@ -23,6 +23,7 @@ apply, and still be "merged" in the sense that matters).
 | `fix/cli-generic-file-upload` | Lets `buzz messages send --file` upload non-image/video files (docs, archives, text) through the generic path. | Owner need: agents deliver files to the owner for download. | Merged (2026-08-06). Open, unmerged PR to upstream: `block/buzz#4753`. |
 | `fix/cli-image-upload-422` | Sanitizes JPEG/PNG before upload to avoid relay 422 rejections. | Upload reliability fix. | Merged — landed earlier via a different commit hash than the original branch tip; confirmed present by content (`sanitize_image_bytes` in `crates/buzz-cli/src/client.rs`). |
 | `fix/codex-dm-root-sessions` | Scopes Codex ACP sessions per thread root instead of per session lifetime (`--thread-scoped-sessions`). | Already the deployed behavior on the VPS's `buzz-acp` (frozen there since the 2026-08-04 buzz-ops decision) — was never in `fork/main` git history until now. | Merged (2026-08-06). |
+| `fix/native-agent-reply-publication` | Adds opt-in `buzz-acp` native delivery of ACP final prose with exact relay ACK validation, same-event retries, durable outbox replay, flat root replies, and transition deduplication when an older agent still sends manually. | Claude and Codex both completed real turns whose final prose stayed only in their internal transcript because publication depended on the model remembering `buzz messages send`. Delivery must be a harness invariant, outside model context and sandbox. | Implemented and verified in isolated worktree (2026-08-12); **not merged, tagged, built, or deployed**. |
 | `fix/hermes-windows-empty-args` | Stops `hermes-acp`/`amp-acp` from crashing on Windows during model discovery. | Windows compatibility fix. | Merged (2026-08-06). |
 
 **Reverted: `feat/relay-allow-html-uploads`.** Briefly merged and deployed
@@ -38,6 +39,33 @@ the only crates touched): 324 + 108 + 671 = 1103 tests passed, 0 failed.
 `cargo test --workspace` itself is currently blocked on this VPS by a missing
 system `pkg-config` needed only by an unrelated `buzz-relay` dev-dependency
 (`mesh-llm` → `openssl-sys`) — not something these patches touch.
+
+### 2026-08-12: native ACP reply publication (unmerged)
+
+The branch `fix/native-agent-reply-publication`, based directly on `fork/main`
+at `ac6f0a255`, captures only ACP `agent_message_chunk` text and auto-publishes
+it only after a successful channel `EndTurn`. It reuses the canonical SDK
+message builder, replies flat to the triggering event's effective root, and
+does not alter `--thread-scoped-sessions` or its `(channel_id, root_event_id)`
+session key.
+
+Delivery is opt-in through `BUZZ_ACP_NATIVE_REPLIES`. Before sending, the
+harness checks whether its identity already posted to the same channel/root
+during the turn, preventing transition duplicates from agents still calling
+the CLI. Otherwise it signs one event, retries that exact event three times,
+and only accepts either exact-ID presence or an `/events` response containing
+both `accepted: true` and the same `event_id`. Exhausted failures persist the
+exact signed event in a per-agent NDJSON outbox (`0600`) for idempotent replay
+at startup and before later sends. Empty prose, heartbeats, cancellations,
+errors, refusals, and token-limit stops do not auto-post.
+
+Verification on the isolated worktree: `cargo test -p buzz-acp` passed 778
+library tests plus 9 integration tests; `cargo clippy -p buzz-acp --all-targets
+-- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` passed.
+This is development evidence only: no runtime, relay, Desktop, Mobile, client,
+or production configuration was changed. It must still pass independent review,
+merge into `fork/main`, receive an approved tag, build from that tag, and pass a
+controlled E2E before any rollout.
 
 **Superseded by the 2026-08-12 sync below: HTML uploads are allowed again.**
 Upstream independently arrived at the same design we built and reverted

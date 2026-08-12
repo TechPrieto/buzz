@@ -622,6 +622,9 @@ pub struct PromptContext {
     pub max_turns_per_session: u32,
     /// Scope ACP sessions by `(channel_id, root_event_id)`.
     pub thread_scoped_sessions: bool,
+    /// Native final-reply publisher. `None` preserves upstream-compatible
+    /// manual delivery through the Buzz CLI.
+    pub native_reply_publisher: Option<Arc<crate::native_reply::NativeReplyPublisher>>,
     /// Permission mode to apply after session creation. `Default` = skip.
     pub permission_mode: PermissionMode,
     /// Agent identity — used to derive the NIP-AE conversation key at
@@ -1476,6 +1479,75 @@ fn send_prompt_result(
     });
 }
 
+async fn maybe_publish_native_reply(
+    agent: &mut OwnedAgent,
+    ctx: &PromptContext,
+    source: &PromptSource,
+    stop_reason: &StopReason,
+    batch: Option<&FlushBatch>,
+    turn_started_at: nostr::Timestamp,
+) {
+    let Some(publisher) = &ctx.native_reply_publisher else {
+        return;
+    };
+    let final_response = agent.acp.take_final_response();
+    let outcome = PromptOutcome::Ok(stop_reason.clone());
+    if matches!(source, PromptSource::Channel(_))
+        && matches!(stop_reason, StopReason::EndTurn)
+        && final_response.trim().is_empty()
+    {
+        tracing::warn!(
+            target: "pool::native_reply",
+            "native final reply was empty; nothing was delivered"
+        );
+        agent.acp.observe(
+            "native_reply_delivery",
+            serde_json::json!({
+                "generated": false,
+                "publishAttempted": false,
+                "accepted": false,
+                "persisted": false,
+                "reason": "empty_final_response",
+            }),
+        );
+        return;
+    }
+    if !crate::native_reply::should_publish_native_reply(source, &outcome, &final_response) {
+        return;
+    }
+    let Some(batch) = batch else {
+        return;
+    };
+
+    let report = publisher
+        .publish(batch, &final_response, turn_started_at)
+        .await;
+    let log_error = report.error.as_deref().unwrap_or("");
+    tracing::info!(
+        target: "pool::native_reply",
+        event_id = report.event_id.as_deref().unwrap_or(""),
+        generated = report.generated,
+        publish_attempted = report.publish_attempted,
+        accepted = report.accepted,
+        persisted = report.persisted,
+        already_published_in_turn = report.already_published_in_turn,
+        error = log_error,
+        "native final reply delivery"
+    );
+    agent.acp.observe(
+        "native_reply_delivery",
+        serde_json::json!({
+            "eventId": report.event_id,
+            "generated": report.generated,
+            "publishAttempted": report.publish_attempted,
+            "accepted": report.accepted,
+            "persisted": report.persisted,
+            "alreadyPublishedInTurn": report.already_published_in_turn,
+            "error": report.error,
+        }),
+    );
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -1519,6 +1591,7 @@ pub async fn run_prompt_task(
         PromptSource::Channel(channel_id) => Some(*channel_id),
         PromptSource::Heartbeat => None,
     };
+    let native_reply_turn_started_at = nostr::Timestamp::now();
     let turn_started_at = chrono::Utc::now().to_rfc3339();
     agent.acp.set_observer_context(observer::context_for_turn(
         observer_channel_id,
@@ -2110,6 +2183,7 @@ pub async fn run_prompt_task(
                 conversation_context_had_delivered_events,
                 profile_lookup: profile_lookup.as_ref(),
                 stable_dm_root_reply: ctx.thread_scoped_sessions,
+                native_replies: ctx.native_reply_publisher.is_some(),
                 has_system_prompt_support: agent.has_system_prompt_support(),
                 base_prompt: standing.base_prompt,
                 system_prompt: standing.system_prompt,
@@ -2335,6 +2409,15 @@ pub async fn run_prompt_task(
                                 pending_delivered_event_ids.iter().cloned(),
                             );
                         }
+                        maybe_publish_native_reply(
+                            &mut agent,
+                            &ctx,
+                            &source,
+                            &StopReason::EndTurn,
+                            batch.as_ref(),
+                            native_reply_turn_started_at,
+                        )
+                        .await;
                         apply_completed_before_control_signal(
                             &mut agent.state,
                             &source,
@@ -2368,6 +2451,16 @@ pub async fn run_prompt_task(
     match prompt_result {
         Ok(stop_reason) => {
             log_stop_reason(&source, &stop_reason);
+
+            maybe_publish_native_reply(
+                &mut agent,
+                &ctx,
+                &source,
+                &stop_reason,
+                batch.as_ref(),
+                native_reply_turn_started_at,
+            )
+            .await;
 
             if let PromptSource::Channel(cid) = &source {
                 let standing_sent = !agent.has_system_prompt_support();
@@ -7575,6 +7668,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
             context_message_limit: 0,
             max_turns_per_session: 0,
             thread_scoped_sessions: false,
+            native_reply_publisher: None,
             permission_mode: PermissionMode::Default,
             agent_keys: agent_keys.clone(),
             agent_owner_pubkey: owner_pubkey,

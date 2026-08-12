@@ -378,6 +378,16 @@ pub struct CliArgs {
     #[arg(long, env = "BUZZ_ACP_THREAD_SCOPED_SESSIONS")]
     pub thread_scoped_sessions: bool,
 
+    /// Publish ordinary successful channel-turn replies directly from the ACP
+    /// harness instead of requiring the agent to call `buzz messages send`.
+    #[arg(long, env = "BUZZ_ACP_NATIVE_REPLIES", default_value_t = false)]
+    pub native_replies: bool,
+
+    /// Durable NDJSON outbox for signed native replies awaiting relay ACK.
+    /// Defaults below the XDG state directory (or `$HOME/.local/state`).
+    #[arg(long, env = "BUZZ_ACP_NATIVE_REPLY_OUTBOX")]
+    pub native_reply_outbox: Option<PathBuf>,
+
     /// Disable automatic presence (online/offline) status.
     #[arg(long, env = "BUZZ_ACP_NO_PRESENCE")]
     pub no_presence: bool,
@@ -531,6 +541,10 @@ pub struct Config {
     pub max_turns_per_session: u32,
     /// Scope sessions and flush batches by `(channel_id, root_event_id)`.
     pub thread_scoped_sessions: bool,
+    /// Whether successful channel turns are published by the harness.
+    pub native_replies: bool,
+    /// Durable path for exact signed events awaiting accepted relay ACKs.
+    pub native_reply_outbox: PathBuf,
     pub presence_enabled: bool,
     pub typing_enabled: bool,
     /// Whether NIP-AE agent core memory injection is enabled. When false,
@@ -846,6 +860,21 @@ pub fn propagate_legacy_env_vars() {
     }
 }
 
+fn default_native_reply_outbox_path(agent_pubkey: &str) -> PathBuf {
+    let filename = format!("acp-native-replies-{agent_pubkey}.ndjson");
+    if let Some(state_home) = std::env::var_os("XDG_STATE_HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(state_home).join("buzz").join(filename);
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|value| !value.is_empty()) {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("state")
+            .join("buzz")
+            .join(filename);
+    }
+    PathBuf::from(format!(".buzz-acp-native-replies-{agent_pubkey}.ndjson"))
+}
+
 impl Config {
     pub fn from_cli() -> Result<Self, ConfigError> {
         // Legacy env-var propagation is intentionally NOT done here.
@@ -1091,6 +1120,10 @@ impl Config {
             ));
         }
 
+        let native_reply_outbox = args
+            .native_reply_outbox
+            .unwrap_or_else(|| default_native_reply_outbox_path(&keys.public_key().to_hex()));
+
         let config = Config {
             keys,
             relay_url: args.relay_url,
@@ -1122,6 +1155,8 @@ impl Config {
             context_message_limit: args.context_message_limit,
             max_turns_per_session: args.max_turns_per_session,
             thread_scoped_sessions: args.thread_scoped_sessions,
+            native_replies: args.native_replies,
+            native_reply_outbox,
             presence_enabled: !args.no_presence,
             typing_enabled: !args.no_typing,
             memory_enabled: args.memory && !args.no_memory,
@@ -1163,7 +1198,7 @@ impl Config {
             format!(" allowed_respond_to=[{}]", modes.join(","))
         };
         format!(
-            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
+            "relay={} pubkey={} agent_cmd={} {} mcp_cmd={} idle_timeout={}s max_turn={}s agents={} heartbeat={}s subscribe={:?} dedup={:?} meh={:?} ignore_self={} context_limit={} max_turns_per_session={} native_replies={} native_reply_outbox={} presence={} typing={} memory={} model={} permission_mode={} {}{}",
             self.relay_url,
             self.keys.public_key().to_hex(),
             self.agent_command,
@@ -1179,6 +1214,8 @@ impl Config {
             self.ignore_self,
             self.context_message_limit,
             self.max_turns_per_session,
+            self.native_replies,
+            self.native_reply_outbox.display(),
             self.presence_enabled,
             self.typing_enabled,
             self.memory_enabled,
@@ -1497,6 +1534,8 @@ mod tests {
             context_message_limit: 12,
             max_turns_per_session: 0,
             thread_scoped_sessions: false,
+            native_replies: false,
+            native_reply_outbox: PathBuf::from("/tmp/buzz-acp-test-native-replies.ndjson"),
             presence_enabled: true,
             typing_enabled: true,
             memory_enabled: true,
@@ -2271,6 +2310,53 @@ channels = "ALL"
             "--thread-scoped-sessions",
         ]);
         assert!(configured.thread_scoped_sessions);
+    }
+
+    #[test]
+    fn native_replies_are_opt_in_and_accept_an_outbox_path() {
+        let key = "0".repeat(64);
+        let default = CliArgs::parse_from(["buzz-acp", "--private-key", &key]);
+        assert!(!default.native_replies);
+        assert!(default.native_reply_outbox.is_none());
+
+        let configured = CliArgs::parse_from([
+            "buzz-acp",
+            "--private-key",
+            &key,
+            "--native-replies",
+            "--native-reply-outbox",
+            "/tmp/native-replies.ndjson",
+        ]);
+        assert!(configured.native_replies);
+        assert_eq!(
+            configured.native_reply_outbox,
+            Some(PathBuf::from("/tmp/native-replies.ndjson"))
+        );
+    }
+
+    #[test]
+    fn native_reply_default_outbox_is_stable_and_scoped_to_agent_pubkey() {
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--native-replies",
+        ])
+        .expect("clap should parse native mode");
+        let config = Config::from_args(args).expect("native config should resolve defaults");
+        let filename = config
+            .native_reply_outbox
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("outbox should have a UTF-8 filename");
+
+        assert_eq!(
+            filename,
+            format!(
+                "acp-native-replies-{}.ndjson",
+                config.keys.public_key().to_hex()
+            )
+        );
     }
 
     #[test]
