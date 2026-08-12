@@ -20,7 +20,7 @@ apply, and still be "merged" in the sense that matters).
 |---|---|---|---|
 | `fix/mobile-dm-messaging` | Scopes mobile DM thread linearity to each root and suppresses nested thread links, so DMs stop showing messages from different threads mixed into one chronological list. | Reported by the team as broken mobile DM UX. | Merged (2026-08-06). |
 | `feat/named-conversation-threads` | Desktop fix: threads created inside a thread now stay flat under the same root instead of nesting a new thread on every reply. | The nested-thread bug the team hit and fixed in our version. | Merged as `08d820cb8` (2026-08-06), desktop suite 3918/3918 passing. |
-| `fix/cli-generic-file-upload` | Lets `buzz messages send --file` upload non-image/video files (docs, archives, text) through the generic path — text/html stays blocked. | Owner need: agents deliver files to the owner for download, not accept HTML uploads. | Merged (2026-08-06). Open, unmerged PR to upstream: `block/buzz#4753`. |
+| `fix/cli-generic-file-upload` | Lets `buzz messages send --file` upload non-image/video files (docs, archives, text) through the generic path. | Owner need: agents deliver files to the owner for download. | Merged (2026-08-06). Open, unmerged PR to upstream: `block/buzz#4753`. |
 | `fix/cli-image-upload-422` | Sanitizes JPEG/PNG before upload to avoid relay 422 rejections. | Upload reliability fix. | Merged — landed earlier via a different commit hash than the original branch tip; confirmed present by content (`sanitize_image_bytes` in `crates/buzz-cli/src/client.rs`). |
 | `fix/codex-dm-root-sessions` | Scopes Codex ACP sessions per thread root instead of per session lifetime (`--thread-scoped-sessions`). | Already the deployed behavior on the VPS's `buzz-acp` (frozen there since the 2026-08-04 buzz-ops decision) — was never in `fork/main` git history until now. | Merged (2026-08-06). |
 | `fix/hermes-windows-empty-args` | Stops `hermes-acp`/`amp-acp` from crashing on Windows during model discovery. | Windows compatibility fix. | Merged (2026-08-06). |
@@ -38,6 +38,17 @@ the only crates touched): 324 + 108 + 671 = 1103 tests passed, 0 failed.
 `cargo test --workspace` itself is currently blocked on this VPS by a missing
 system `pkg-config` needed only by an unrelated `buzz-relay` dev-dependency
 (`mesh-llm` → `openssl-sys`) — not something these patches touch.
+
+**Superseded by the 2026-08-12 sync below: HTML uploads are allowed again.**
+Upstream independently arrived at the same design we built and reverted
+above (`bba3e0638`, #5569) — HTML is accepted but never served inline
+(`Content-Disposition: attachment` + `nosniff` + `CSP: default-src 'none'`,
+enforced by tests). Owner reviewed the specific diff and explicitly chose to
+take upstream's version rather than keep our override (2026-08-12,
+#buzz-ops). `text/html` is out of the deny-list in both
+`crates/buzz-media/src/validation.rs` and its CLI mirror
+`crates/buzz-cli/src/client.rs` again. Executables and SVG/JS/XHTML remain
+blocked in both.
 
 ## 2026-08-08: upstream sync to `desktop-v0.5.7`
 
@@ -174,6 +185,64 @@ Validation before push:
   runs on both the merge tip and the `techprieto-baseline-2026-08-10`
   pre-merge tip reproduced it identically on both (different test names
   failing each run) — confirmed still preexisting, not from this merge.
+- `cargo build --release -p buzz-relay`: compiles clean (8m24s).
+
+Pushed to `origin/main` (`TechPrieto/buzz`, public) after all of the above.
+Not deployed to the VPS relay yet — separate step pending the owner's
+go-ahead.
+
+## 2026-08-12: upstream sync to `desktop-v0.5.10`
+
+Merged `origin/main` (23 upstream commits since `desktop-v0.5.9`) directly
+into `fork/main` in an isolated worktree (`/tmp/sync-0.5.10`), no rebase, per
+the rule above. Commit: `792c7a5ba`. Rollback point: tag
+`techprieto-baseline-2026-08-12` (the pre-merge tip, `f1fc33732`).
+
+**Real conflicts, decided with the owner before merging:**
+
+- `crates/buzz-media/src/validation.rs`: upstream's `bba3e0638` (#5569)
+  removes `text/html` from the generic-file deny-list, serving it strictly
+  as an inert download instead — the exact design we built and reverted on
+  2026-08-06 (see the "Superseded" note above). Flagged to the owner before
+  merging since it reopens an explicit prior decision; owner reviewed and
+  chose to take upstream's version (2026-08-12, #buzz-ops). Took theirs.
+  Also updated `crates/buzz-cli/src/client.rs`'s `BLOCKED_MIMES` — our own
+  client-side mirror of this deny-list, untouched by upstream's commit since
+  it's fork-only code — to drop `text/html` too, so the CLI stays consistent
+  with the relay instead of rejecting uploads the relay would now accept.
+- `desktop/src/features/messages/ui/MessageThreadPanel.tsx`: our
+  `feat/named-conversation-threads` WIP (`threadTitle`, `threadReplies` in
+  a `useMemo` dep array) and upstream's new "Send to channel for thread
+  messages" (`b0795a10e`, `useStableSendToChannel`) both touched the same
+  spot right before the `!threadHead` early return. Kept both — verified
+  `useStableSendToChannel` handles a `null` `threadHead` internally, so it's
+  safe to call before the early return same as upstream's original
+  ordering, while `threadTitle` (which dereferences `threadHead.body`
+  directly) stays after it like ours did.
+
+`crates/buzz-acp/src/pool.rs`, `queue.rs`, and `config.rs` auto-merged
+cleanly this time despite last sync's conflicts there — but `cargo test`
+caught a real breakage auto-merge couldn't: upstream's `6e0631f6b` (channel
+description in prompt context) added a `description` field to
+`PromptChannelInfo`, and three of our own test call sites in `queue.rs`
+(two from this fork's history, one reconstructed during the 0.5.9 conflict
+resolution) constructed it as a struct literal without that field. Fixed by
+adding `description: None` to each. Lesson: a clean auto-merge on a struct
+definition doesn't guarantee call sites elsewhere in the same file are
+still valid — `cargo check`/`test` on the affected crate is still required
+even when there's no conflict marker to review.
+
+Also reviewed before merging: `397796c5f` (PostgreSQL tracing spans) — all
+internal instrumentation, no new external exporters or outbound calls.
+
+Validation before push:
+- `cargo check -p buzz-media -p buzz-cli` and `cargo check -p buzz-acp
+  --tests` after the manual resolutions, both clean, before committing.
+- `cargo test --workspace --exclude buzz-relay --no-fail-fast`: same two
+  pre-existing failures as every sync since 0.5.7 — `git-sign-nostr`'s
+  known upstream bug, and `buzz-agent`'s turn-cancellation flakiness
+  (re-confirmed on both the merge tip and the `techprieto-baseline-2026-08-12`
+  pre-merge tip with repeated `-p buzz-agent --test fake_llm` runs).
 - `cargo build --release -p buzz-relay`: compiles clean (8m24s).
 
 Pushed to `origin/main` (`TechPrieto/buzz`, public) after all of the above.
