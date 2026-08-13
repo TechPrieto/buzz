@@ -296,6 +296,60 @@ Pushed to `origin/main` (`TechPrieto/buzz`, public) after all of the above.
 Not deployed to the VPS relay yet — separate step pending the owner's
 go-ahead.
 
+## 2026-08-13: upstream sync to `desktop-v0.5.11`
+
+Merged `origin/main` (14 upstream commits since `desktop-v0.5.10`) directly
+into `fork/main` in an isolated worktree (`/tmp/sync-0.5.11`), no rebase, per
+the rule above. Commit: `3a4f20c6d`. Rollback point: tag
+`techprieto-baseline-2026-08-14` (the pre-merge tip, `ccfb56511`).
+
+**Real conflicts, resolved by hand:**
+
+- `crates/buzz-acp/src/acp.rs`, `config.rs`: additive-only on both sides
+  (upstream's `4749bc7be` added `standard_usage`/`standard_adapter` fields
+  and an `idle_pool_sleep` CLI test; ours already had `final_response` and
+  `thread_scoped_sessions`). Kept both sides' fields, both sides' tests.
+- `mobile/lib/features/channels/thread_detail_page.dart`: upstream's
+  `7634fe745` (#4702, "settle hydrated threads on latest reply") reworks the
+  thread list's scroll/tail-follow wiring (`LaidOutViewportReporter`,
+  `tailIntent`, `initialTailSettle`) around the *same* `itemBuilder` our
+  `feat/named-conversation-threads` patch already modified for nested-thread
+  summaries. Auto-merge produced two copies of the `itemBuilder` body (one
+  under each side of the conflict) instead of recognizing they were the same
+  logical block. Took upstream's outer scroll/tail-follow wrapper structure,
+  discarded our duplicate `itemBuilder` copy, and re-applied our
+  `shouldShowNestedThreadSummary(linearize: linearizeThread, ...)` gating
+  into the surviving (upstream-side) `itemBuilder` in place of its simpler
+  unconditional nested-summary check. No `flutter analyze` available in this
+  environment to verify statically — resolved by direct read of both full
+  bodies to confirm they were the same widget tree.
+
+Notable upstream change reviewed, not acted on: `a96af8952` (#4220,
+"Harden shared agent instruction review") — hardens shared system-prompt
+review against Markdown-hidden content, non-reviewable Unicode controls, and
+unverified catalog authorship/signatures before trusting executable content.
+Pure hardening, no interaction with our patches; taken as-is.
+
+Validation before push:
+- `cargo check -p buzz-acp --tests`: clean after manual resolutions.
+- `cargo test --workspace --exclude buzz-relay --no-fail-fast`: same two
+  pre-existing failure patterns as every sync since 0.5.7 — `git-sign-nostr`'s
+  known upstream bug (`test_parse_envelope_rejects_invalid_oa_pubkey`,
+  reproduced identically), and `buzz-agent`'s turn-cancellation flakiness in
+  `fake_llm` (re-confirmed with 3 repeated `-p buzz-agent --test fake_llm`
+  runs on this merge tip — a different test name failed each run, the
+  flaky-test signature, not a regression).
+- `cargo build --release -p buzz-relay`: compiles clean (8m46s).
+- `detect-secrets scan` scoped to the 153 files this merge touched: 92 hits,
+  all manually confirmed false positives (dev-default DB connection strings,
+  a Helm values placeholder already marked `sadscan:disable`, a pinned git
+  commit SHA in `Cargo.toml`, and test/e2e fixture literals like
+  `api_key: "key"` and mock hex pubkeys/nsecs). Zero real secrets.
+
+Pushed to `fork/main` (`TechPrieto/buzz`, public) after all of the above.
+Not deployed to the VPS relay yet — separate step pending the owner's
+go-ahead.
+
 ## Sync procedure
 
 Never `rebase` `fork/main` against `origin/main` — it rewrites history that
