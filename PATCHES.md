@@ -23,8 +23,27 @@ apply, and still be "merged" in the sense that matters).
 | `fix/cli-generic-file-upload` | Lets `buzz messages send --file` upload non-image/video files (docs, archives, text) through the generic path. | Owner need: agents deliver files to the owner for download. | Merged (2026-08-06). Open, unmerged PR to upstream: `block/buzz#4753`. |
 | `fix/cli-image-upload-422` | Sanitizes JPEG/PNG before upload to avoid relay 422 rejections. | Upload reliability fix. | Merged — landed earlier via a different commit hash than the original branch tip; confirmed present by content (`sanitize_image_bytes` in `crates/buzz-cli/src/client.rs`). |
 | `fix/codex-dm-root-sessions` | Scopes Codex ACP sessions per thread root instead of per session lifetime (`--thread-scoped-sessions`). | Already the deployed behavior on the VPS's `buzz-acp` (frozen there since the 2026-08-04 buzz-ops decision) — was never in `fork/main` git history until now. | Merged (2026-08-06). |
-| `fix/native-agent-reply-publication` | Adds opt-in `buzz-acp` native delivery of ACP final prose with exact relay ACK validation, same-event retries, durable outbox replay, flat root replies, and transition deduplication when an older agent still sends manually. | Claude and Codex both completed real turns whose final prose stayed only in their internal transcript because publication depended on the model remembering `buzz messages send`. Delivery must be a harness invariant, outside model context and sandbox. | Implemented and verified in isolated worktree (2026-08-12); **not merged, tagged, built, or deployed**. |
+| `fix/native-agent-reply-publication` | Adds opt-in `buzz-acp` native delivery of ACP final prose with exact relay ACK validation, same-event retries, durable outbox replay, flat root replies, and transition deduplication when an older agent still sends manually. | Claude and Codex both completed real turns whose final prose stayed only in their internal transcript because publication depended on the model remembering `buzz messages send`. Delivery must be a harness invariant, outside model context and sandbox. | Merged into `fork/main` as `989aef7e9` (2026-08-13). **Not built, tagged, deployed, or enabled** — `--native-replies` stays off until a rollout plan exists. |
 | `fix/hermes-windows-empty-args` | Stops `hermes-acp`/`amp-acp` from crashing on Windows during model discovery. | Windows compatibility fix. | Merged (2026-08-06). |
+
+**`fix/native-agent-reply-publication` independent review (2026-08-13).**
+Owner asked for the branch to be reviewed rather than trusted, per the
+existing "independently verify, don't take another agent's report on faith"
+rule. Re-ran everything Hermes reported (778+9 tests, clippy, fmt) and
+confirmed it matched exactly. Found one gap Hermes's review didn't cover
+because it's specific to our deployment, not the code in isolation: the
+default native-reply outbox path is scoped only by agent pubkey
+(`acp-native-replies-{pubkey}.ndjson`), and our own `buzz-claude-*` services
+(`ops-channel`, `anitas`, `seagull`, `vida-en-ascenso`) share one identity —
+several separate OS processes would point at the same outbox file with no
+coordination beyond an in-process `tokio::sync::Mutex`, risking a lost reply
+if two processes raced on the outbox's read-modify-rename cycle. Fixed at
+the code level (`989aef7e9`) with a cross-process `flock` on a stable
+sidecar `.lock` file, rather than leaving it as an operational
+"remember to pass `--native-reply-outbox` per service" footgun. Verified
+the lock is a real cross-process primitive (not just re-testing the
+existing mutex) with a dedicated test using two independently-opened file
+handles — that's how the kernel actually distinguishes separate holders.
 
 **Reverted: `feat/relay-allow-html-uploads`.** Briefly merged and deployed
 2026-08-06 (`buzz-relay:html-fix-2026-08-04`), then reverted the same day —
