@@ -44,6 +44,7 @@ impl NativeReplyOutbox {
     pub(crate) async fn persist(&self, event: &Event) -> Result<()> {
         let _guard = self.access.lock().await;
         ensure_parent_dir(&self.path)?;
+        let _flock = lock_outbox_exclusive(&self.path)?;
         let mut options = std::fs::OpenOptions::new();
         options.create(true).append(true);
         #[cfg(unix)]
@@ -67,6 +68,8 @@ impl NativeReplyOutbox {
         Fut: std::future::Future<Output = Result<DeliveryStatus>>,
     {
         let _guard = self.access.lock().await;
+        ensure_parent_dir(&self.path)?;
+        let _flock = lock_outbox_exclusive(&self.path)?;
         let pending = read_pending(&self.path)?;
         if pending.is_empty() {
             return Ok(OutboxDrainReport {
@@ -221,6 +224,56 @@ impl NativeReplyPublisher {
             },
         }
     }
+}
+
+/// Path of the stable sidecar lock file for a given outbox.
+///
+/// The lock is taken on this separate, never-replaced file rather than on
+/// `path` itself: `rewrite_pending` retargets the `path` directory entry to a
+/// new inode via `rename`, which would silently detach an flock held on the
+/// old inode from any lock a fresh opener takes on the (now different)
+/// current inode. A dedicated file that is only ever opened and locked, never
+/// renamed, keeps the same inode for the outbox's entire lifetime, so the
+/// lock stays meaningful across every acquirer.
+fn lock_path_for(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".lock");
+    PathBuf::from(name)
+}
+
+/// Block until an exclusive advisory lock on `path`'s outbox is held.
+///
+/// The default outbox path is scoped only by agent pubkey, not by channel or
+/// process — several `buzz-acp` processes for the same identity (one per
+/// channel) can share a single outbox file. The `tokio::sync::Mutex` on
+/// [`NativeReplyOutbox`] only serializes access *within* one process; this
+/// `flock` is what serializes the read-modify-rename cycle in `persist` and
+/// `drain_with` *across* those processes so a concurrent writer can never
+/// observe or clobber a half-written outbox.
+#[cfg(unix)]
+fn lock_outbox_exclusive(path: &Path) -> Result<nix::fcntl::Flock<std::fs::File>> {
+    let lock_path = lock_path_for(path);
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).write(true).truncate(false);
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(&lock_path)
+        .with_context(|| format!("open native reply outbox lock {}", lock_path.display()))?;
+    enforce_private_file_permissions(&lock_path)?;
+    nix::fcntl::Flock::lock(file, nix::fcntl::FlockArg::LockExclusive).map_err(|(_, errno)| {
+        anyhow::anyhow!(
+            "flock native reply outbox lock {}: {errno}",
+            lock_path.display()
+        )
+    })
+}
+
+#[cfg(not(unix))]
+fn lock_outbox_exclusive(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 fn ensure_parent_dir(path: &Path) -> Result<()> {
@@ -762,6 +815,48 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].id, rejected_id);
         let _ = std::fs::remove_file(path);
+    }
+
+    /// Two independently-opened file handles are how the kernel actually
+    /// distinguishes concurrent processes for `flock` purposes — this proves
+    /// the lock is a real cross-process mutual-exclusion primitive and not
+    /// just re-testing the in-process `tokio::sync::Mutex`.
+    #[cfg(unix)]
+    #[test]
+    fn outbox_lock_is_exclusive_across_independent_file_handles() {
+        let path = std::env::temp_dir().join(format!(
+            "buzz-acp-native-reply-lock-{}.ndjson",
+            Uuid::new_v4()
+        ));
+        let lock_path = lock_path_for(&path);
+
+        let first_holder = lock_outbox_exclusive(&path).expect("first lock should succeed");
+
+        let second_handle = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open independent second handle");
+        let second_attempt =
+            nix::fcntl::Flock::lock(second_handle, nix::fcntl::FlockArg::LockExclusiveNonblock);
+        let second_handle = match second_attempt {
+            Ok(_) => panic!("a second independent handle must not acquire the lock while the first holder is alive"),
+            Err((handle, errno)) => {
+                assert_eq!(errno, nix::errno::Errno::EWOULDBLOCK);
+                handle
+            }
+        };
+
+        drop(first_holder);
+
+        let third_attempt =
+            nix::fcntl::Flock::lock(second_handle, nix::fcntl::FlockArg::LockExclusiveNonblock)
+                .expect("lock must become available once the first holder drops it");
+        drop(third_attempt);
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&lock_path);
     }
 
     #[cfg(unix)]

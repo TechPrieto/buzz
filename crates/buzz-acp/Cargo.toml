@@ -72,9 +72,11 @@ toml = "1.0"
 evalexpr = { workspace = true }
 
 # Process-group kill (safe wrapper around killpg) — Unix-only; kill_process_group
-# has a #[cfg(not(unix))] fallback in acp.rs.
+# has a #[cfg(not(unix))] fallback in acp.rs. `fs` adds `flock`, used by the
+# native-reply outbox to serialize access across processes sharing one
+# identity — also has a #[cfg(not(unix))] fallback in native_reply.rs.
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["signal"] }
+nix = { version = "0.31", default-features = false, features = ["signal", "fs"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
