@@ -92,6 +92,8 @@ export type MessageComposerProps = {
       parentEventId: string | null;
       threadHeadId: string | null;
     } | null,
+    /** Route through the REST publisher even when best-effort enrichment settled empty. */
+    forceRest?: boolean,
   ) => Promise<void>;
   placeholder?: string;
   profiles?: UserProfileLookup;

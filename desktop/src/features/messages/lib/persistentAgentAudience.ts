@@ -144,10 +144,17 @@ export function initializePersistentAgentAudience(
   pubkeys: Iterable<string>,
 ): void {
   if (!enabled || !scope) return;
-  setPersistentAgentAudience(
-    scope,
-    Object.hasOwn(audiences, scope) ? audiences[scope] : pubkeys,
-  );
+  if (Object.hasOwn(audiences, scope)) {
+    // Touch an existing scope so the bounded store retains recently reopened
+    // conversations, including an explicit empty audience chosen by the user.
+    setPersistentAgentAudience(scope, audiences[scope]);
+    return;
+  }
+  const normalized = normalizePubkeys(pubkeys);
+  // A first empty observation is not authoritative: relay hydration may still
+  // discover the addressed agents later. Do not claim the root prematurely.
+  if (normalized.length === 0) return;
+  setPersistentAgentAudience(scope, normalized);
 }
 
 export function setPersistentAgentAudience(
