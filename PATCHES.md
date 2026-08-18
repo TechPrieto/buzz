@@ -389,9 +389,15 @@ Validation before promotion:
 
 The fork's `windows-canary.yml` is enabled for `TechPrieto/buzz` so an unsigned,
 short-lived Windows installer can be built from the validated fork `main`
-instead of installing the upstream artifact without TechPrieto patches. Relay,
-Compose, database, Mobile distribution, identities, and persistent harnesses
-remain unchanged; Desktop installation is a separate human-visible step.
+instead of installing the upstream artifact without TechPrieto patches. The
+first run succeeded at `https://github.com/TechPrieto/buzz/actions/runs/32133413112`
+from source `6c8a61cb37ffd4021061c696debe5f06dc998230` and produced
+`Buzz_0.5.17-test.1_x64-setup.exe` (53,991,600 bytes; SHA-256
+`732f08c9e50b120e65e1f88f54447a0de5ad511cb5e28d6c0afec70e382f3d0c`).
+The canary version is derived from Desktop 0.5.16 and deliberately has no
+auto-updater artifacts. Relay, Compose, database, Mobile distribution,
+identities, and persistent harnesses remain unchanged; Desktop installation
+and visible E2E are separate human-visible steps.
 
 ## Sync procedure
 
