@@ -16,9 +16,7 @@ permissions:
 jobs:
   build:
     name: Build Windows canary
-    # Upstream and the TechPrieto fork both use this workflow to produce a
-    # short-lived, unsigned QA installer from their own main branch.
-    if: github.repository == 'block/buzz' || github.repository == 'TechPrieto/buzz'
+    if: github.repository == 'block/buzz'
     runs-on: windows-latest
     timeout-minutes: 60
     permissions:

@@ -350,49 +350,6 @@ Pushed to `fork/main` (`TechPrieto/buzz`, public) after all of the above.
 Not deployed to the VPS relay yet — separate step pending the owner's
 go-ahead.
 
-## 2026-08-18: upstream sync to `desktop-v0.5.16`
-
-Merged the immutable upstream tag `desktop-v0.5.16`
-(`a6211b0e285600a6f08d6592261e44ecc4a6917b`) into `fork/main` in the isolated
-worktree `/home/abraham/buzz-worktrees/desktop-v0.5.16`, no rebase. Merge
-commit: `f742e9607`. Rollback point:
-`techprieto-baseline-desktop-v0.5.16-2026-08-18` at `b24fefe54`.
-
-The merge had one textual conflict, in Mobile's split compose-bar widget.
-Upstream had moved `ComposeBarOnSend` to `compose_bar.dart`; the fork still
-needed `messageNotificationPubkeys` for DM recipient notifications. The
-resolution kept the upstream typedef location and the fork's notification
-helper. The two focused Mobile suites passed 91 tests.
-
-The full Desktop suite found one semantic auto-merge regression not exposed by
-a conflict marker: a first empty relay observation claimed a thread root with
-an empty persistent audience. `initializePersistentAgentAudience` now keeps
-upstream's bounded/LRU touch behavior for an existing scope, including an
-explicit user-cleared scope, but leaves a new scope unclaimed until at least
-one valid agent pubkey is observed. Its 16 focused tests and the repeated full
-Desktop suite pass.
-
-Validation before promotion:
-- Desktop focused relay-agent mention policy: 36/36 passed.
-- Desktop full unit suite: 4,999/4,999 passed.
-- Desktop `typecheck` and production frontend build: passed.
-- Mobile compose-bar and DM-recipient suites: 91/91 passed.
-- `cargo check -p buzz-acp --tests`: passed.
-- `git diff --check`: passed; no unresolved markers.
-- The upstream immutable tag's Windows release workflow completed successfully.
-  The authenticated artifact was retrieved only for comparison; it is not the
-  TechPrieto installer and was not promoted.
-- A local Tauri Rust test attempt was blocked before compilation because this
-  VPS lacks system `pkg-config`/GLib development packages. This is an
-  environment prerequisite, not a test failure; the official Windows release
-  job for the exact upstream tag passed.
-
-The fork's `windows-canary.yml` is enabled for `TechPrieto/buzz` so an unsigned,
-short-lived Windows installer can be built from the validated fork `main`
-instead of installing the upstream artifact without TechPrieto patches. Relay,
-Compose, database, Mobile distribution, identities, and persistent harnesses
-remain unchanged; Desktop installation is a separate human-visible step.
-
 ## Sync procedure
 
 Never `rebase` `fork/main` against `origin/main` — it rewrites history that
