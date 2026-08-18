@@ -11,6 +11,12 @@ that was never ours to begin with.
 When upstream ships a native equivalent of something listed here, drop our
 patch on the next sync and take theirs — fewer custom diffs to carry forward.
 
+**Desktop distribution policy:** TechPrieto may maintain and test source patches
+in this fork, but Abraham installs Buzz Desktop only from public, official
+`block/buzz` GitHub Releases. Do not build, attach, promote, or install a
+TechPrieto/fork Desktop canary. Fork changes belong in runtimes, integrations,
+or upstream contributions until Block publishes them officially.
+
 "Merged" below means the code is verifiably in `fork/main`'s git history —
 confirmed by content, not just branch-ref ancestry (a fix can land via a
 different commit hash than its original branch, e.g. cherry-pick or manual
