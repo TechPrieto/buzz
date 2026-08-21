@@ -356,6 +356,94 @@ Pushed to `fork/main` (`TechPrieto/buzz`, public) after all of the above.
 Not deployed to the VPS relay yet — separate step pending the owner's
 go-ahead.
 
+## 2026-08-13 to 2026-08-18: upstream sync to `desktop-v0.5.16` (undocumented)
+
+`fork/main` was synced through `desktop-v0.5.16` sometime in this window
+(commit `f742e9607`, "merge: sync upstream desktop-v0.5.16") without a
+PATCHES.md entry — verified the merge is genuinely a merge (not a rebase,
+per the rule above) and the resulting history is sound, but the conflict
+decisions from that session aren't recorded here. A TechPrieto Windows
+canary build was also attempted and reverted in this window (`6c8a61cb3`
+built, `bfe001978`/`0c5b6a042` reverted it and its docs same-day), followed
+by `62a39627b` ("docs: require official Buzz Desktop releases") — the
+owner's policy note now at the top of this file: Desktop installs only from
+official `block/buzz` GitHub Releases, never from a TechPrieto/fork build.
+
+## 2026-08-21: upstream sync to `desktop-v0.5.18`
+
+Merged `origin/main` (78 upstream commits since `desktop-v0.5.16`) directly
+into `fork/main` in an isolated worktree (`/tmp/sync-0.5.18`), no rebase, per
+the rule above. Commit: `25b355261`. Rollback point: tag
+`techprieto-baseline-2026-08-21` (the pre-merge tip, `62a39627b`).
+
+**Real conflicts, resolved by hand:**
+
+- `crates/buzz-cli/src/commands/messages.rs`: test-only import list —
+  upstream's new `feat(cli): accept Buzz message links for thread reads`
+  (#6359) added several imports our test module didn't have; merged both
+  sides' import lists.
+- `desktop/src/features/channels/ui/ChannelPane.tsx`: our only real diff
+  here is one prop (`allowNamedThread` on `MessageComposer`), but git
+  rendered it as a large block conflict because upstream also touched
+  nearby lines (adding `ChannelComposerActivityAccessory`, a component our
+  fork tip was missing entirely). Took upstream's structure, kept our prop.
+- `desktop/src/features/messages/ui/MessageThreadPanel.tsx`: found and
+  dropped a dead `threadHeaderContent` block left over from our own
+  `feat/named-conversation-threads` WIP — grepped the whole file and
+  confirmed it (and the `threadTitle`/`resolveThreadTitle` it depended on)
+  had zero other references. Upstream's side never had it. Not a regression
+  from this merge; just cleanup surfaced by the conflict.
+- `mobile/.../compose_bar/compose_bar_widget.dart`: upstream extracted the
+  text-only-draft send path into a new `draft_lifecycle.dart` file
+  (`_sendTextOnlyDraft`, `part of`). Verified it preserves our
+  `_reportSendCancelledByCommunitySwitch`/`_composeSendErrorMessage` error
+  handling (both still defined and called) and actually improves on our
+  version — it restores the cleared draft on send failure, which ours
+  didn't do. Adopted upstream's call wholesale.
+- `mobile/.../thread_detail_page.dart`: two conflicts. First, upstream moved
+  `liveHead` computation earlier in the function (next to where `replies`
+  is now computed) — kept our `linearizeThread`-gated `buildThreadReplies`
+  call for `replies` and added the earlier `liveHead` alongside it. Second,
+  and larger: upstream extracted the whole thread-message `ScrollablePositionedList`
+  into its own `_ThreadMessageList` widget class
+  (`thread_detail_page/message_list.dart`) with real new features — initial
+  viewport visibility gating, scroll-position tracking for read-state,
+  local-send animations, sticky day headers. That widget's nested-thread
+  summary check was unconditional (upstream doesn't have DM-thread
+  linearization); added a `linearizeThread` field to the widget and
+  restored our `shouldShowNestedThreadSummary(linearize:, hasNestedChildren:)`
+  gating inside its `itemBuilder`, matching the same fix pattern as the
+  0.5.11 sync's conflict in this same file. No `flutter analyze` available
+  in this environment — resolved by direct read of the full new widget file
+  against our prior logic.
+
+Notable upstream changes reviewed, taken as-is: `cc8a8b0dc` (bump h2 for
+RUSTSEC-2026-0258 — dependency-level TLS fix), and a cluster of five PRs
+hardening agent-mention authorization across owner-only builds and
+cross-device/cross-owner cases (`3fdf289b7`, `ee0c7076a`, `d274a6e94`,
+`f716eef43`, `bcf353c96`) — pure hardening, no interaction with our patches.
+
+Validation before push:
+- `cargo check -p buzz-cli --tests`: clean after manual resolutions.
+- `cargo test --workspace --exclude buzz-relay --no-fail-fast`: same two
+  pre-existing failure patterns as every sync since 0.5.7 — `git-sign-nostr`'s
+  known upstream bug (`test_parse_envelope_rejects_invalid_oa_pubkey`,
+  identical panic line), and `buzz-agent`'s turn-cancellation flakiness in
+  `fake_llm` (3 repeated `-p buzz-agent --test fake_llm` runs, a different
+  test failing each time).
+- `cargo build --release -p buzz-relay`: compiles clean (8m31s).
+- `detect-secrets scan` scoped to the 907 files this merge touched: 157
+  hits, all manually confirmed false positives — test-fixture placeholder
+  nsecs (some literally named `nsec1fake`/`nsec1secret`), the repo's
+  documented public "Tyler" local-dev test identity in `Justfile`
+  (explicitly labeled never-for-prod), dev-default DB connection strings,
+  and a URL-embedded test credential in a link-parsing unit test. Zero real
+  secrets.
+
+Pushed to `fork/main` (`TechPrieto/buzz`, public) after all of the above.
+Not deployed to the VPS relay yet — separate step pending the owner's
+go-ahead.
+
 ## Sync procedure
 
 Never `rebase` `fork/main` against `origin/main` — it rewrites history that
