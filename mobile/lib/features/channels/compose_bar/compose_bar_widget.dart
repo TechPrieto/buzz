@@ -33,6 +33,12 @@ class ComposeBar extends HookConsumerWidget {
   /// prepare focus-dependent layout (for example, following a thread tail).
   final VoidCallback? onFocusRequested;
 
+  /// Parent-owned if set; otherwise internally created and disposed.
+  final FocusNode? focusNode;
+
+  /// Receives a restorer which becomes a no-op after replacement/unmount.
+  final ValueChanged<VoidCallback>? onFocusRestorerChanged;
+
   /// Optional thread IDs for thread-scoped typing indicators.
   final String? threadHeadId;
   final String? rootId;
@@ -43,6 +49,8 @@ class ComposeBar extends HookConsumerWidget {
     this.hintText,
     this.threadHeadId,
     this.rootId,
+    this.focusNode,
+    this.onFocusRestorerChanged,
     this.onFocusRequested,
     required this.onSend,
   });
@@ -54,15 +62,9 @@ class ComposeBar extends HookConsumerWidget {
       () => controller.text,
     );
     useEffect(() => controller.dispose, [controller]);
-    // Restore and persist unsent text as a local draft so the Activity
-    // inbox Drafts filter reflects real composer state.
-    //
-    // The effect is additionally keyed on the active relay + pubkey identity:
-    // provider-level namespacing alone cannot protect a composer that stays
-    // mounted through an in-place community/account switch — the controller
-    // would retain the old identity's text and the next edit would persist it
-    // into the new identity's store. On identity change we replace the
-    // controller content with the new identity's own saved draft (or clear).
+    // Draft identity is part of the effect key because an in-place account or
+    // community switch can leave this composer mounted. Reload that identity's
+    // draft so old text cannot be persisted into the new identity's store.
     final draftKey = composeDraftKey(channelId, threadHeadId: threadHeadId);
     final draftRevision = useRef(0);
     final draftIdentity =
@@ -73,15 +75,13 @@ class ComposeBar extends HookConsumerWidget {
       defaultTargetPlatform != TargetPlatform.android,
     );
     final androidImeFallbackTimer = useRef<Timer?>(null);
-    final focusNode = useFocusNode();
+    final ownedFocusNode = useFocusNode();
+    final focusNode = this.focusNode ?? ownedFocusNode;
     useEffect(
-      () =>
-          () => androidImeFallbackTimer.value?.cancel(),
-      [androidImeFallbackTimer],
-    );
-    useEffect(
-      () =>
-          () => _dismissComposerKeyboard(focusNode),
+      () => () {
+        androidImeFallbackTimer.value?.cancel();
+        _dismissComposerKeyboard(focusNode);
+      },
       [focusNode],
     );
     final isEmojiPickerOpen = useState(false);
@@ -479,6 +479,7 @@ class ComposeBar extends HookConsumerWidget {
           uploadingCount.value > 0) {
         return;
       }
+      final submittedDraftRevision = draftRevision.value;
       // Resolved before any await: see
       // `_reportSendCancelledByCommunitySwitch`.
       final messenger = ScaffoldMessenger.maybeOf(context);
@@ -533,29 +534,25 @@ class ComposeBar extends HookConsumerWidget {
       isSending.value = true;
       try {
         if (queuedAttachments.isEmpty) {
-          try {
-            await addMentionedNonMembers();
-            final payload = _ComposeDraftPayload.fromDraft(
+          if (!context.mounted) return;
+          await _sendTextOnlyDraft(
+            context: context,
+            controller: controller,
+            mentionMap: mentionMap,
+            draftRevision: draftRevision,
+            submittedDraftRevision: submittedDraftRevision,
+            focusNode: focusNode,
+            clearComposer: clearComposer,
+            addMentionedNonMembers: addMentionedNonMembers,
+            payload: _ComposeDraftPayload.fromDraft(
               text: text,
               attachments: const [],
               customEmoji: customEmoji,
-            );
-            await onSend(
-              payload.content,
-              notificationPubkeys(),
-              mediaTags: [...payload.mediaTags, ...outgoing.referenceTags],
-            );
-            if (context.mounted) clearComposer();
-          } on StateError {
-            _reportSendCancelledByCommunitySwitch(messenger);
-          } catch (error) {
-            // send() runs unawaited, so a relay rejection or publish timeout
-            // would otherwise vanish with the composer looking idle. The draft
-            // is kept (clearComposer never ran) so the user can retry.
-            messenger?.showSnackBar(
-              SnackBar(content: Text(_composeSendErrorMessage(error))),
-            );
-          }
+            ),
+            outgoing: outgoing,
+            onSend: onSend,
+            messenger: messenger,
+          );
           return;
         }
 
@@ -893,6 +890,13 @@ class ComposeBar extends HookConsumerWidget {
       view: appView,
       androidImeTransitionStarted: androidImeTransitionStarted,
       androidImeFallbackTimer: androidImeFallbackTimer,
+    );
+
+    _useComposerFocusRestorer(
+      onChanged: onFocusRestorerChanged,
+      isExpanded: isComposerExpanded,
+      focusNode: focusNode,
+      expand: expandComposer,
     );
 
     final suggestionPanel = _composerSuggestionPanel(
